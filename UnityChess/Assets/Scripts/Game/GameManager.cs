@@ -130,7 +130,7 @@ public class GameManager : MonoBehaviourSingleton<GameManager> {
 	/// <summary>
 	/// Starts a new game by creating a new game instance and invoking the NewGameStartedEvent.
 	/// </summary>
-	public async void StartNewGame() {
+	public void StartNewGame() {
 		game = new Game();
 		NewGameStartedEvent?.Invoke();
 	}
