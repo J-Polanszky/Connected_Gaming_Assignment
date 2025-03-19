@@ -71,3 +71,25 @@ crashlytics-build.properties
 # Temporary auto-generated Android Assets
 /[Aa]ssets/[Ss]treamingAssets/aa.meta
 /[Aa]ssets/[Ss]treamingAssets/aa/*
+
+
+# Other
+.idea/
+Logs/
+UserSettings/*
+UnityChess\.Test/obj/
+UnityChess\.Test/bin/Debug/
+UnityChess\.Test/bin/
+UnityChess\.Test/UnityChessLib/obj/
+UnityChess\.Test/UnityChessLib/bin/Debug/
+UnityChess\.Test/UnityChessLib/bin/
+*.DotSettings
+
+/*_clone_*/*
+
+*FirebaseCppApp-12_4_1.so
+*FirebaseCppApp-12_4_1.bundle
+*FirebaseCppApp-12_5_0.bundle
+*FirebaseCppApp-12_5_0.so
+
+UnityChess_clone*/
