@@ -17,9 +17,11 @@ public class NetworkManagerHandler : MonoBehaviour
     [SerializeField] private int maxConnections = 2;
 
     bool isHosting = true;
-    private bool started = false;
+    private bool started, shuttingdown;
 
-    private Transform joinCodeObj, title;
+    private Transform joinCodeObj;
+
+    private TextMeshProUGUI title, pingText;
 
     public static NetworkManagerHandler Instance { get; private set; }
 
@@ -42,6 +44,9 @@ public class NetworkManagerHandler : MonoBehaviour
 
     private void OnDisable()
     {
+        if(shuttingdown)
+            return;
+        
         NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnect;
     }
 
@@ -98,6 +103,7 @@ public class NetworkManagerHandler : MonoBehaviour
     public void QuitGame()
     {
         NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnect;
+        shuttingdown = true;
         
 #if UNITY_EDITOR
         UnityEditor.EditorApplication.isPlaying = false;
@@ -124,8 +130,7 @@ public class NetworkManagerHandler : MonoBehaviour
                 }
 
                 string joinCode = task.Result;
-                Debug.Log($"Join code: {joinCode}");
-                title.GetComponent<TextMeshProUGUI>().text = joinCode;
+                title.text = joinCode;
                 started = true;
             });
             return;
@@ -137,7 +142,7 @@ public class NetworkManagerHandler : MonoBehaviour
         startButton.GetComponent<Button>().onClick.AddListener(JoinGame);
         GameObject.FindWithTag("Dropdown").SetActive(false);
         joinCodeObj.gameObject.SetActive(true);
-        title.gameObject.GetComponent<TextMeshProUGUI>().text = "Enter Join Code";
+        title.text = "Enter Join Code";
     }
 
     void JoinGame()
@@ -153,6 +158,7 @@ public class NetworkManagerHandler : MonoBehaviour
             }
 
             Debug.Log("Joined game");
+            started = true;
         });
     }
 
@@ -167,7 +173,15 @@ public class NetworkManagerHandler : MonoBehaviour
         Button quitButton = GameObject.FindWithTag("QuitButton").GetComponent<Button>();
         TMP_Dropdown dropDown = GameObject.FindWithTag("Dropdown").GetComponent<TMP_Dropdown>();
         joinCodeObj = dropDown.transform.parent.Find("JoinCode");
-        title = dropDown.transform.parent.Find("Title");
+        title = dropDown.transform.parent.Find("Title").GetComponent<TextMeshProUGUI>();
+        
+        GameObject pingCanvas = GameObject.FindWithTag("PingUI");
+        GameObject debugConsole = GameObject.FindWithTag("DebugConsole");
+        
+        DontDestroyOnLoad(pingCanvas);
+        DontDestroyOnLoad(debugConsole);
+
+        pingText = pingCanvas.transform.GetChild(0).GetComponent<TextMeshProUGUI>();
 
         startButton.onClick.AddListener(StartGame);
         quitButton.onClick.AddListener(QuitGame);
@@ -252,5 +266,42 @@ public class NetworkManagerHandler : MonoBehaviour
             Debug.LogError($"Failed to join with relay: {e.Message}");
             return false;
         }
+    }
+
+    private void FixedUpdate()
+    {
+        if (!started)
+            return;
+        
+        float ping = MeasurePing();
+
+        if (ping < 0)
+        {
+            //TODO: Output some sort of text
+        }
+
+        SetPingText(ping);
+    }
+
+    void SetPingText(float ping)
+    {
+        int roundedPing = Mathf.RoundToInt(ping);
+        pingText.text = $"{roundedPing}ms";
+    }
+
+    float MeasurePing()
+    {
+        //TODO: Test on another PC to see if this works, since with parrelsync it's always 0
+        if (NetworkManager.Singleton.IsClient)
+        {
+            float ping =
+                NetworkManager.Singleton.NetworkConfig.NetworkTransport.GetCurrentRtt(NetworkManager.Singleton
+                    .LocalClientId);
+            Debug.Log($"Current Ping: {ping}");
+
+            return ping;
+        }
+
+        return -1;
     }
 }
