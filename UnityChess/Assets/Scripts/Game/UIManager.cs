@@ -170,16 +170,11 @@ public class UIManager : MonoBehaviourSingleton<UIManager> {
 	/// Resets the game to the last half-move in the timeline.
 	/// </summary>
 	public void ResetGameToLastHalfMove() => GameManager.Instance.ResetGameToHalfMoveIndex(GameManager.Instance.HalfMoveTimeline.Count - 1);
-
-	/// <summary>
-	/// Starts a new game by invoking the corresponding method in GameManager.
-	/// </summary>
-	public void StartNewGame() => GameManager.Instance.StartNewGame();
 	
-	/// <summary>
-	/// Loads a game from the text entered in the game string input field.
-	/// </summary>
-	public void LoadGame() => GameManager.Instance.LoadGame(GameStringInputField.text);
+	// /// <summary>
+	// /// Loads a game from the text entered in the game string input field.
+	// /// </summary>
+	// public void LoadGame() => GameManager.Instance.LoadGame(GameStringInputField.text);
 
 	/// <summary>
 	/// Adds a new move to the move history UI based on the latest half-move.
@@ -292,4 +287,15 @@ public class UIManager : MonoBehaviourSingleton<UIManager> {
 	/// Updates the game string input field with the current serialized game state.
 	/// </summary>
 	private void UpdateGameStringInputField() => GameStringInputField.text = GameManager.Instance.SerializeGame();
+	
+	public void ShowMessage(string message)
+	{
+		// Show a message to the player
+		// This assumes you have a text element that can display messages
+		if (resultText != null)
+		{
+			resultText.text = message;
+			resultText.gameObject.SetActive(true);
+		}
+	}
 }

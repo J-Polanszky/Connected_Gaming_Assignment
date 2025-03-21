@@ -7,6 +7,8 @@ namespace UnityChess {
 		public King() : base(Side.None) {}
 		public King(Side owner) : base(owner) {}
 
+		public override PieceType GetPieceType() => PieceType.King;
+		
 		public override Dictionary<(Square, Square), Movement> CalculateLegalMoves(
 			Board board,
 			GameConditions gameConditions,

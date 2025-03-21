@@ -1,6 +1,17 @@
 ﻿using System.Collections.Generic;
 
 namespace UnityChess {
+	public enum PieceType : byte
+	{
+		None = 0,
+		Pawn = 1,
+		Knight = 2,
+		Bishop = 3,
+		Rook = 4,
+		Queen = 5,
+		King = 6
+	}
+	
 	/// <summary>Base class for any chess piece.</summary>
 	public abstract class Piece {
 		public Side Owner { get; protected set; }
@@ -34,6 +45,8 @@ namespace UnityChess {
 			Rook { Owner: Side.Black } => "♖",
 			_ => "."
 		};
+
+		public virtual PieceType GetPieceType() => PieceType.None;
 	}
 
 	public abstract class Piece<T> : Piece where T : Piece<T>, new() {

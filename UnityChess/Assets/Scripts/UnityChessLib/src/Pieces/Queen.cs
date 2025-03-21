@@ -5,6 +5,8 @@ namespace UnityChess {
 		public Queen() : base(Side.None) {}
 		public Queen(Side owner) : base(owner) {}
 
+		public override PieceType GetPieceType() => PieceType.Queen;
+		
 		public override Dictionary<(Square, Square), Movement> CalculateLegalMoves(
 			Board board,
 			GameConditions gameConditions,

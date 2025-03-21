@@ -6,6 +6,8 @@ namespace UnityChess {
 		
 		public Pawn() : base(Side.None) {}
 		public Pawn(Side owner) : base(owner) {}
+		
+		public override PieceType GetPieceType() => PieceType.Pawn;
 
 		public override Dictionary<(Square, Square), Movement> CalculateLegalMoves(
 			Board board,

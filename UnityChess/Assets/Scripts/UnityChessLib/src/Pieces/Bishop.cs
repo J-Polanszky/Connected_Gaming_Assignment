@@ -5,6 +5,8 @@ namespace UnityChess {
 		public Bishop() : base(Side.None) {}
 		public Bishop(Side owner) : base(owner) {}
 
+		public override PieceType GetPieceType() => PieceType.Bishop;
+		
 		public override Dictionary<(Square, Square), Movement> CalculateLegalMoves(
 			Board board,
 			GameConditions gameConditions,

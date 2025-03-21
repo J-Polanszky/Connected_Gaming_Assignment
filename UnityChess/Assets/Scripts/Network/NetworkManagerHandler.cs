@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using TMPro;
 using Unity.Netcode;
@@ -12,42 +13,22 @@ using Unity.Services.Relay.Models;
 using UnityEngine;
 using UnityEngine.UI;
 
-public class NetworkManagerHandler : MonoBehaviour
+public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandler>
 {
     [SerializeField] private int maxConnections = 2;
 
     bool isHosting = true;
-    private bool started, shuttingdown;
+    private bool started, isGameActive;
 
     private Transform joinCodeObj;
 
     private TextMeshProUGUI title, pingText;
 
-    public static NetworkManagerHandler Instance { get; private set; }
+    MainThreadDispatcher mainThreadDispatcher;
 
     private void Awake()
     {
-        if (Instance != null && Instance != this)
-        {
-            Destroy(gameObject);
-            return;
-        }
-
-        Instance = this;
         DontDestroyOnLoad(gameObject);
-    }
-
-    private void OnEnable()
-    {
-        NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnect;
-    }
-
-    private void OnDisable()
-    {
-        if(shuttingdown)
-            return;
-        
-        NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnect;
     }
 
     void SaveGameState()
@@ -87,8 +68,45 @@ public class NetworkManagerHandler : MonoBehaviour
         }
     }
 
+    void OnClientConnected(ulong clientId)
+    {
+        Debug.Log($"Client connected: {clientId}");
+        if (isHosting && NetworkManager.Singleton.ConnectedClients.Count == 2)
+        {
+            if (isGameActive)
+            {
+                SendGameStateToClient(clientId);
+                return;
+            }
+
+            isGameActive = true;
+            GameManager.Instance.StartGameServerRpc(clientId);
+        }
+    }
+
+    [ServerRpc(RequireOwnership = true)]
+    void SendGameStateToClient(ulong clientId)
+    {
+        string serialisedGameState = GameManager.Instance.SerializeGame();
+        SendGameStateClientRpc(serialisedGameState,
+            new ClientRpcParams
+                { Send = new ClientRpcSendParams { TargetClientIds = new List<ulong> { { clientId } } } });
+    }
+
+    [ClientRpc]
+    void SendGameStateClientRpc(string serialisedGameState, ClientRpcParams clientRpcParams = default)
+    {
+        GameManager.Instance.LoadGame(serialisedGameState);
+    }
+
     void OnClientDisconnect(ulong clientId)
     {
+        if (isHosting && GameManager.Instance != null)
+        {
+            GameManager.Instance.HandlePlayerDisconnectServerRpc(clientId);
+            return;
+        }
+
         // check if the client that disconnected was the host
         if (clientId == NetworkManager.ServerClientId)
         {
@@ -102,9 +120,6 @@ public class NetworkManagerHandler : MonoBehaviour
 
     public void QuitGame()
     {
-        NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnect;
-        shuttingdown = true;
-        
 #if UNITY_EDITOR
         UnityEditor.EditorApplication.isPlaying = false;
 #else
@@ -130,8 +145,25 @@ public class NetworkManagerHandler : MonoBehaviour
                 }
 
                 string joinCode = task.Result;
-                title.text = joinCode;
-                started = true;
+
+                Debug.Log("Sending join code to main thread");
+
+                mainThreadDispatcher.Enqueue(() =>
+                {
+                    Debug.Log("Executing on main thread");
+                    started = true;
+
+                    NetworkManager.Singleton.SceneManager.LoadScene("UnityChessGame",
+                        UnityEngine.SceneManagement.LoadSceneMode.Single);
+
+                    IEnumerator WaitForSceneLoad()
+                    {
+                        yield return new WaitForSeconds(0.5f);
+                        GameManager.Instance.SetGameCode(joinCode);
+                    }
+
+                    StartCoroutine(WaitForSceneLoad());
+                });
             });
             return;
         }
@@ -159,6 +191,9 @@ public class NetworkManagerHandler : MonoBehaviour
 
             Debug.Log("Joined game");
             started = true;
+
+            NetworkManager.Singleton.SceneManager.LoadScene("UnityChessGame",
+                UnityEngine.SceneManagement.LoadSceneMode.Single);
         });
     }
 
@@ -174,10 +209,10 @@ public class NetworkManagerHandler : MonoBehaviour
         TMP_Dropdown dropDown = GameObject.FindWithTag("Dropdown").GetComponent<TMP_Dropdown>();
         joinCodeObj = dropDown.transform.parent.Find("JoinCode");
         title = dropDown.transform.parent.Find("Title").GetComponent<TextMeshProUGUI>();
-        
+
         GameObject pingCanvas = GameObject.FindWithTag("PingUI");
         GameObject debugConsole = GameObject.FindWithTag("DebugConsole");
-        
+
         DontDestroyOnLoad(pingCanvas);
         DontDestroyOnLoad(debugConsole);
 
@@ -189,6 +224,14 @@ public class NetworkManagerHandler : MonoBehaviour
         joinCodeObj.gameObject.SetActive(false);
 
         await InitialiseUnityServices();
+
+        mainThreadDispatcher = MainThreadDispatcher.Instance;
+
+        if (NetworkManager.Singleton != null)
+        {
+            NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
+            NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnect;
+        }
     }
 
     async Task InitialiseUnityServices()
@@ -272,7 +315,7 @@ public class NetworkManagerHandler : MonoBehaviour
     {
         if (!started)
             return;
-        
+
         float ping = MeasurePing();
 
         if (ping < 0)
@@ -297,11 +340,19 @@ public class NetworkManagerHandler : MonoBehaviour
             float ping =
                 NetworkManager.Singleton.NetworkConfig.NetworkTransport.GetCurrentRtt(NetworkManager.Singleton
                     .LocalClientId);
-            Debug.Log($"Current Ping: {ping}");
 
             return ping;
         }
 
         return -1;
+    }
+
+    private void OnDestroy()
+    {
+        if (NetworkManager.Singleton != null)
+        {
+            NetworkManager.Singleton.OnClientConnectedCallback -= OnClientConnected;
+            NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnect;
+        }
     }
 }

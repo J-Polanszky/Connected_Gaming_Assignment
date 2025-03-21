@@ -5,6 +5,8 @@ namespace UnityChess {
 		public Rook() : base(Side.None) {}
 		public Rook(Side owner) : base(owner) {}
 
+		public override PieceType GetPieceType() => PieceType.Rook;
+		
 		public override Dictionary<(Square, Square), Movement> CalculateLegalMoves(
 			Board board,
 			GameConditions gameConditions,
