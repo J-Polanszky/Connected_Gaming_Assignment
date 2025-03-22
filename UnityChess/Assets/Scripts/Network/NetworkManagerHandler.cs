@@ -26,6 +26,8 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
 
     MainThreadDispatcher mainThreadDispatcher;
 
+    private Guid currentAllocationId;
+
     private void Awake()
     {
         DontDestroyOnLoad(gameObject);
@@ -38,34 +40,34 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
 
     async void MigrateHost()
     {
-        try
-        {
-            NetworkManager.Singleton.Shutdown();
-
-            Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxConnections);
-
-            string joinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
-            Debug.Log($"Join code: {joinCode}");
-
-            UnityTransport transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
-
-            transport.SetRelayServerData(
-                allocation.RelayServer.IpV4,
-                (ushort)allocation.RelayServer.Port,
-                allocation.AllocationIdBytes,
-                allocation.Key,
-                allocation.ConnectionData
-            );
-
-            NetworkManager.Singleton.StartHost();
-
-            // Display join code
-            // TODO:   
-        }
-        catch (Exception e)
-        {
-            Debug.LogError($"Failed to migrate host: {e.Message}");
-        }
+        // try
+        // {
+        //     NetworkManager.Singleton.Shutdown();
+        //
+        //     Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxConnections);
+        //
+        //     string joinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
+        //     Debug.Log($"Join code: {joinCode}");
+        //
+        //     UnityTransport transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+        //
+        //     transport.SetRelayServerData(
+        //         allocation.RelayServer.IpV4,
+        //         (ushort)allocation.RelayServer.Port,
+        //         allocation.AllocationIdBytes,
+        //         allocation.Key,
+        //         allocation.ConnectionData
+        //     );
+        //
+        //     NetworkManager.Singleton.StartHost();
+        //
+        //     // Display join code
+        //     // TODO:   
+        // }
+        // catch (Exception e)
+        // {
+        //     Debug.LogError($"Failed to migrate host: {e.Message}");
+        // }
     }
 
     void OnClientConnected(ulong clientId)
@@ -257,6 +259,8 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         try
         {
             Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxConnections);
+            
+            currentAllocationId = allocation.AllocationId;
 
             string joinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
             Debug.Log($"Join code: {joinCode}");
@@ -271,7 +275,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
                 allocation.ConnectionData
                 // TODO: Set secure?  
             );
-
+            
             NetworkManager.Singleton.StartHost();
 
             return joinCode;
@@ -354,5 +358,15 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
             NetworkManager.Singleton.OnClientConnectedCallback -= OnClientConnected;
             NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnect;
         }
+        
+        try{
+            NetworkManager.Singleton.DisconnectClient(NetworkManager.Singleton.LocalClientId);
+        } catch (Exception e)
+        {
+            Debug.LogError($"Failed to disconnect client: {e.Message}");
+        }
+        
+        NetworkManager.Singleton.Shutdown();
+        
     }
 }

@@ -1524,6 +1524,16 @@ PrefabInstance:
       propertyPath: m_Name
       value: Button1
       objectReference: {fileID: 0}
+    - target: {fileID: 1534536629280980999, guid: caf93e4ddc2f0544cbddf4e2facb7fd7,
+        type: 3}
+      propertyPath: m_Size
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 1534536629280980999, guid: caf93e4ddc2f0544cbddf4e2facb7fd7,
+        type: 3}
+      propertyPath: m_Value
+      value: 1
+      objectReference: {fileID: 0}
     - target: {fileID: 1534536630634025830, guid: caf93e4ddc2f0544cbddf4e2facb7fd7,
         type: 3}
       propertyPath: m_AdditionalShaderChannelsFlag
@@ -3910,7 +3920,8 @@ PrefabInstance:
       propertyPath: m_AnchoredPosition.y
       value: 0
       objectReference: {fileID: 0}
-    m_RemovedComponents: []
+    m_RemovedComponents:
+    - {fileID: 7463109368315077786, guid: caf93e4ddc2f0544cbddf4e2facb7fd7, type: 3}
     m_RemovedGameObjects: []
     m_AddedGameObjects:
     - targetCorrespondingSourceObject: {fileID: 4626005267971531542, guid: caf93e4ddc2f0544cbddf4e2facb7fd7,
@@ -3921,38 +3932,8 @@ PrefabInstance:
         type: 3}
       insertIndex: -1
       addedObject: {fileID: 982724235}
-    m_AddedComponents:
-    - targetCorrespondingSourceObject: {fileID: 7463109367895200372, guid: caf93e4ddc2f0544cbddf4e2facb7fd7,
-        type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 7463109366908870896}
+    m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: caf93e4ddc2f0544cbddf4e2facb7fd7, type: 3}
---- !u!1 &7463109366908870895 stripped
-GameObject:
-  m_CorrespondingSourceObject: {fileID: 7463109367895200372, guid: caf93e4ddc2f0544cbddf4e2facb7fd7,
-    type: 3}
-  m_PrefabInstance: {fileID: 7463109366908870894}
-  m_PrefabAsset: {fileID: 0}
---- !u!114 &7463109366908870896
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 7463109366908870895}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  GlobalObjectIdHash: 2710815117
-  AlwaysReplicateAsRoot: 0
-  SynchronizeTransform: 1
-  ActiveSceneSynchronization: 0
-  SceneMigrationSynchronization: 1
-  SpawnWithObservers: 1
-  DontDestroyWithOwner: 0
-  AutoObjectParentSync: 1
 --- !u!224 &7463109366908870897 stripped
 RectTransform:
   m_CorrespondingSourceObject: {fileID: 4626005267971531542, guid: caf93e4ddc2f0544cbddf4e2facb7fd7,

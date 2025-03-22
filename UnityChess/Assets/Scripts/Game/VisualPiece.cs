@@ -47,6 +47,7 @@ public class VisualPiece : MonoBehaviour {
 		thisTransform = transform;
 		// Obtain the main camera from the scene.
 		boardCamera = Camera.main;
+		Debug.Log("Piece Created");
 	}
 
 	/// <summary>

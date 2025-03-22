@@ -421,6 +421,7 @@ public class GameManager : NetworkBehaviour
         Transform closestBoardSquareTransform, Piece promotionPiece = null)
     {
         // Don't process moves if game isn't active
+        // Should not be possible
         if (!isGameActive.Value)
         {
             // Return piece to its original position
@@ -458,16 +459,17 @@ public class GameManager : NetworkBehaviour
     }
 
     [ServerRpc(RequireOwnership = false)]
-    public void ValidateMoveServerRpc(SerializedSquare startSquare, SerializedSquare endSquare,
+    void ValidateMoveServerRpc(SerializedSquare startSquare, SerializedSquare endSquare,
         byte promotionPieceType = 0, ServerRpcParams rpcParams = default)
     {
+        // Again, should not be possible
         if (!isGameActive.Value)
             return;
 
         ulong clientId = rpcParams.Receive.SenderClientId;
 
         bool validPlayer = (currentPlayerTurn.Value == 0 && clientId == 0) ||
-                           (currentPlayerTurn.Value == 1 && clientId == 1);
+                           (currentPlayerTurn.Value == 1 && clientId != 0);
 
         if (!validPlayer)
             return;
@@ -475,10 +477,10 @@ public class GameManager : NetworkBehaviour
         Square start = new Square(startSquare.File, startSquare.Rank);
         Square end = new Square(endSquare.File, endSquare.Rank);
 
+        // Send an event to the sender to reset his piece. This is mostly done to prevent cheating by bypassing
+        // the game logic done on the client side.
         if (!game.TryGetLegalMove(start, end, out Movement move))
-        {
             return;
-        }
 
         if (move is PromotionMove promotionMove && promotionPieceType > 0)
         {
@@ -550,6 +552,8 @@ public class GameManager : NetworkBehaviour
     [ClientRpc]
     void ExecuteMoveClientRpc(SerialisedMove move)
     {
+        Debug.Log("Client ID: " + NetworkManager.Singleton.LocalClientId);
+        
         Square startSquare = new Square(move.StartSquare.File, move.StartSquare.Rank);
         Square endSquare = new Square(move.EndSquare.File, move.EndSquare.Rank);
 
@@ -581,9 +585,16 @@ public class GameManager : NetworkBehaviour
         }
 
         BoardManager.Instance.TryDestroyVisualPiece(endSquare);
-
-        pieceTransform.parent = destTransform;
+        
+        pieceTransform.SetParent(destTransform);
         pieceTransform.position = destTransform.position;
+        
+        game.TryExecuteMove(new Movement(startSquare, endSquare));
+        
+        // Update the current board state
+        // Piece movedPiece = Instance.CurrentBoard[startSquare.File, startSquare.Rank];
+        // Instance.CurrentBoard[startSquare.File, startSquare.Rank] = null;
+        // Instance.CurrentBoard[endSquare.File, endSquare.Rank] = movedPiece;
     }
 
     [ClientRpc]
