@@ -38,37 +38,37 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         // Save the game state
     }
 
-    async void MigrateHost()
-    {
-        // try
-        // {
-        //     NetworkManager.Singleton.Shutdown();
-        //
-        //     Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxConnections);
-        //
-        //     string joinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
-        //     Debug.Log($"Join code: {joinCode}");
-        //
-        //     UnityTransport transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
-        //
-        //     transport.SetRelayServerData(
-        //         allocation.RelayServer.IpV4,
-        //         (ushort)allocation.RelayServer.Port,
-        //         allocation.AllocationIdBytes,
-        //         allocation.Key,
-        //         allocation.ConnectionData
-        //     );
-        //
-        //     NetworkManager.Singleton.StartHost();
-        //
-        //     // Display join code
-        //     // TODO:   
-        // }
-        // catch (Exception e)
-        // {
-        //     Debug.LogError($"Failed to migrate host: {e.Message}");
-        // }
-    }
+    // async void MigrateHost()
+    // {
+    //     try
+    //     {
+    //         NetworkManager.Singleton.Shutdown();
+    //     
+    //         Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxConnections);
+    //     
+    //         string joinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
+    //         Debug.Log($"Join code: {joinCode}");
+    //     
+    //         UnityTransport transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+    //     
+    //         transport.SetRelayServerData(
+    //             allocation.RelayServer.IpV4,
+    //             (ushort)allocation.RelayServer.Port,
+    //             allocation.AllocationIdBytes,
+    //             allocation.Key,
+    //             allocation.ConnectionData
+    //         );
+    //     
+    //         NetworkManager.Singleton.StartHost();
+    //     
+    //         // Display join code
+    //         // TODO:   
+    //     }
+    //     catch (Exception e)
+    //     {
+    //         Debug.LogError($"Failed to migrate host: {e.Message}");
+    //     }
+    // }
 
     void OnClientConnected(ulong clientId)
     {
@@ -77,28 +77,14 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         {
             if (isGameActive)
             {
-                SendGameStateToClient(clientId);
+                GameManager.Instance.ResumeGame();
+                GameManager.Instance.SendGameStateServerRpc(clientId);
                 return;
             }
 
             isGameActive = true;
             GameManager.Instance.StartGameServerRpc(clientId);
         }
-    }
-
-    [ServerRpc(RequireOwnership = true)]
-    void SendGameStateToClient(ulong clientId)
-    {
-        string serialisedGameState = GameManager.Instance.SerializeGame();
-        SendGameStateClientRpc(serialisedGameState,
-            new ClientRpcParams
-                { Send = new ClientRpcSendParams { TargetClientIds = new List<ulong> { { clientId } } } });
-    }
-
-    [ClientRpc]
-    void SendGameStateClientRpc(string serialisedGameState, ClientRpcParams clientRpcParams = default)
-    {
-        GameManager.Instance.LoadGame(serialisedGameState);
     }
 
     void OnClientDisconnect(ulong clientId)
@@ -109,15 +95,16 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
             return;
         }
 
-        // check if the client that disconnected was the host
-        if (clientId == NetworkManager.ServerClientId)
-        {
-            // Save the game state
-            SaveGameState();
-            // Stop the unity relay server/lobby, and then create a new one with the non-disconnected client as the host
-            // AKA Host Migration
-            MigrateHost();
-        }
+        // FIXME: This does not work as expected
+        // // check if the client that disconnected was the host
+        // if (clientId == NetworkManager.ServerClientId)
+        // {
+        //     // Save the game state
+        //     SaveGameState();
+        //     // Stop the unity relay server/lobby, and then create a new one with the non-disconnected client as the host
+        //     // AKA Host Migration
+        //     MigrateHost();
+        // }
     }
 
     public void QuitGame()
@@ -357,16 +344,18 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         {
             NetworkManager.Singleton.OnClientConnectedCallback -= OnClientConnected;
             NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnect;
-        }
-        
-        try{
             NetworkManager.Singleton.DisconnectClient(NetworkManager.Singleton.LocalClientId);
-        } catch (Exception e)
-        {
-            Debug.LogError($"Failed to disconnect client: {e.Message}");
+            NetworkManager.Singleton.Shutdown();
         }
-        
-        NetworkManager.Singleton.Shutdown();
-        
+    }
+
+    public void GameOver()
+    {
+        isGameActive = false;
+    }
+    
+    public void RestartGame()
+    {
+        isGameActive = true;
     }
 }

@@ -20,7 +20,7 @@ public class GameManager : NetworkBehaviour
     private NetworkVariable<int> currentPlayerTurn = new(0); // 0 = White, 1 = Black
 
     private Transform gameInfo;
-    private string gameCodeStr;
+    private string gameCodeStr, serialisedGame;
     private TextMeshProUGUI gameCode;
 
     // Events signalling various game state changes.
@@ -320,9 +320,9 @@ public class GameManager : NetworkBehaviour
 
     void OnGameActiveChanged(bool oldValue, bool newValue)
     {
-        if(!IsHost)
+        if (!IsHost)
             return;
-        
+
         if (newValue)
         {
             BoardManager.Instance.EnsureOnlyPiecesOfSideAreEnabled(IsHost ? Side.White : Side.Black);
@@ -378,7 +378,7 @@ public class GameManager : NetworkBehaviour
             return;
 
         isGameActive.Value = true;
-        
+
         string serialisedGameState = SerializeGame();
 
         StartGameClientRpc(serialisedGameState,
@@ -399,7 +399,10 @@ public class GameManager : NetworkBehaviour
     public void HandlePlayerDisconnectServerRpc(ulong clientId)
     {
         if (!IsHost) return;
-
+        
+        if (!isGameActive.Value)
+            return;
+        
         // Pause the game or end it
         isGameActive.Value = false;
 
@@ -417,7 +420,7 @@ public class GameManager : NetworkBehaviour
         Debug.Log($"Player {clientId} disconnected. Game paused.");
     }
 
-    void OnNetworkedPieceMoved(Square movedPieceInitialSquare, Transform movedPieceTransform,
+    void OnNetworkedPieceMoved(Square startSquare, Transform movedPieceTransform,
         Transform closestBoardSquareTransform, Piece promotionPiece = null)
     {
         // Don't process moves if game isn't active
@@ -426,6 +429,13 @@ public class GameManager : NetworkBehaviour
         {
             // Return piece to its original position
             movedPieceTransform.position = movedPieceTransform.parent.position;
+            return;
+        }
+        
+        // Make sure the current board is in sync with the game
+        if (serialisedGame != null && SerializeGame() != serialisedGame)
+        {
+            LoadGame(serialisedGame);
             return;
         }
 
@@ -440,26 +450,27 @@ public class GameManager : NetworkBehaviour
         Square endSquare = new Square(closestBoardSquareTransform.name);
 
         // Attempt to retrieve a legal move from the game logic.
-        if (!game.TryGetLegalMove(movedPieceInitialSquare, endSquare, out Movement move))
+        if (!game.TryGetLegalMove(startSquare, endSquare, out Movement move))
         {
             // If no legal move is found, reset the piece's position.
             movedPieceTransform.position = movedPieceTransform.parent.position;
 #if DEBUG_VIEW
 			// In debug view, log the legal moves for further analysis.
-			Piece movedPiece = CurrentBoard[movedPieceInitialSquare];
+			Piece movedPiece = CurrentBoard[startSquare];
 			game.TryGetLegalMovesForPiece(movedPiece, out ICollection<Movement> legalMoves);
 			UnityChessDebug.ShowLegalMovesInLog(legalMoves);
 #endif
             return;
         }
 
-        ValidateMoveServerRpc(new SerializedSquare(movedPieceInitialSquare.File, movedPieceInitialSquare.Rank),
+        ValidateMoveServerRpc(new SerializedSquare(startSquare.File, startSquare.Rank),
             new SerializedSquare(endSquare.File, endSquare.Rank),
+            (byte)CurrentBoard[startSquare.File, startSquare.Rank].GetPieceType(),
             promotionPiece != null ? (byte)promotionPiece.GetPieceType() : (byte)0);
     }
 
     [ServerRpc(RequireOwnership = false)]
-    void ValidateMoveServerRpc(SerializedSquare startSquare, SerializedSquare endSquare,
+    void ValidateMoveServerRpc(SerializedSquare startSquare, SerializedSquare endSquare, byte pieceTypeByte,
         byte promotionPieceType = 0, ServerRpcParams rpcParams = default)
     {
         // Again, should not be possible
@@ -476,6 +487,14 @@ public class GameManager : NetworkBehaviour
 
         Square start = new Square(startSquare.File, startSquare.Rank);
         Square end = new Square(endSquare.File, endSquare.Rank);
+        
+        PieceType originalPieceType = (PieceType)pieceTypeByte;
+
+        if (CurrentBoard[startSquare.File, startSquare.Rank].GetPieceType() != originalPieceType)
+        {
+            // TODO: Sync the board with the client
+            return;
+        }
 
         // Send an event to the sender to reset his piece. This is mostly done to prevent cheating by bypassing
         // the game logic done on the client side.
@@ -547,13 +566,15 @@ public class GameManager : NetworkBehaviour
             currentPlayerTurn.Value = currentPlayerTurn.Value == 0 ? 1 : 0;
 
         MoveExecutedEvent?.Invoke();
+        
+        serialisedGame = SerializeGame();
     }
 
     [ClientRpc]
     void ExecuteMoveClientRpc(SerialisedMove move)
     {
         Debug.Log("Client ID: " + NetworkManager.Singleton.LocalClientId);
-        
+
         Square startSquare = new Square(move.StartSquare.File, move.StartSquare.Rank);
         Square endSquare = new Square(move.EndSquare.File, move.EndSquare.Rank);
 
@@ -585,16 +606,13 @@ public class GameManager : NetworkBehaviour
         }
 
         BoardManager.Instance.TryDestroyVisualPiece(endSquare);
-        
+
         pieceTransform.SetParent(destTransform);
         pieceTransform.position = destTransform.position;
-        
+
         game.TryExecuteMove(new Movement(startSquare, endSquare));
-        
-        // Update the current board state
-        // Piece movedPiece = Instance.CurrentBoard[startSquare.File, startSquare.Rank];
-        // Instance.CurrentBoard[startSquare.File, startSquare.Rank] = null;
-        // Instance.CurrentBoard[endSquare.File, endSquare.Rank] = movedPiece;
+
+        serialisedGame = SerializeGame();
     }
 
     [ClientRpc]
@@ -611,6 +629,12 @@ public class GameManager : NetworkBehaviour
             UIManager.Instance.ShowMessage("Stalemate! The game is a draw.");
 
         GameEndedEvent?.Invoke();
+
+        if (IsHost)
+        {
+            isGameActive.Value = false;
+            NetworkManagerHandler.Instance.GameOver();
+        }
     }
 
     public override void OnDestroy()
@@ -621,5 +645,32 @@ public class GameManager : NetworkBehaviour
         base.OnDestroy();
 
         VisualPiece.VisualPieceMoved -= OnNetworkedPieceMoved;
+    }
+
+    public string GetSerializedGame()
+    {
+        return serialisedGame ?? SerializeGame();
+    }
+
+    public void ResumeGame()
+    {
+        if (!IsHost)
+            return;
+
+        isGameActive.Value = true;
+    }
+    
+    [ServerRpc(RequireOwnership = true)]
+    public void SendGameStateServerRpc(ulong clientId)
+    {
+        ReceiveGameStateClientRpc(GetSerializedGame(),
+            new ClientRpcParams
+                { Send = new ClientRpcSendParams { TargetClientIds = new List<ulong> { { clientId } } } });
+    }
+
+    [ClientRpc]
+    void ReceiveGameStateClientRpc(string serialisedGameState, ClientRpcParams clientRpcParams = default)
+    {
+        LoadGame(serialisedGameState);
     }
 }
