@@ -573,6 +573,10 @@ public class GameManager : NetworkBehaviour
     [ClientRpc]
     void ExecuteMoveClientRpc(SerialisedMove move)
     {
+        // Return if the client is the host, since the move would already be executed from the server rpc.
+        if (IsHost)
+            return;
+        
         Debug.Log("Client ID: " + NetworkManager.Singleton.LocalClientId);
 
         Square startSquare = new Square(move.StartSquare.File, move.StartSquare.Rank);
@@ -612,7 +616,10 @@ public class GameManager : NetworkBehaviour
 
         game.TryExecuteMove(new Movement(startSquare, endSquare));
 
+        MoveExecutedEvent?.Invoke();
+        
         serialisedGame = SerializeGame();
+        Debug.Log("Game state: " + serialisedGame);
     }
 
     [ClientRpc]
