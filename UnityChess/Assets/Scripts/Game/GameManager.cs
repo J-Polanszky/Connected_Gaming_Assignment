@@ -1,11 +1,13 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using TMPro;
 using Unity.Netcode;
 using UnityChess;
 using UnityEngine;
+using UnityEngine.UI;
 
 /// <summary>
 /// Manages the overall game state, including game start, moves execution,
@@ -22,6 +24,9 @@ public class GameManager : NetworkBehaviour
     private Transform gameInfo;
     private string gameCodeStr, serialisedGame;
     private TextMeshProUGUI gameCode;
+
+    private Button leftButton, rightButton;
+    private Text leftButtonText, rightButtonText;
 
     // Events signalling various game state changes.
     public static event Action NewGameStartedEvent;
@@ -153,6 +158,13 @@ public class GameManager : NetworkBehaviour
         gameInfo = GameObject.FindWithTag("GameInfo").transform;
         gameCode = GameObject.FindWithTag("Gamecode").GetComponent<TextMeshProUGUI>();
 
+        GameObject leftButtonObj = GameObject.FindWithTag("LeftButton");
+        GameObject rightButtonObj = GameObject.FindWithTag("RightButton");
+        leftButton = leftButtonObj.GetComponent<Button>();
+        rightButton = rightButtonObj.GetComponent<Button>();
+        leftButtonText = leftButton.transform.GetChild(0).GetComponent<Text>();
+        rightButtonText = rightButton.transform.GetChild(0).GetComponent<Text>();
+
         // // Subscribe to the event triggered when a visual piece is moved.
         // VisualPiece.VisualPieceMoved += OnPieceMoved;
         //
@@ -191,6 +203,40 @@ public class GameManager : NetworkBehaviour
     {
         game = serializersByType[selectedSerializationType].Deserialize(serializedGame);
         NewGameStartedEvent?.Invoke();
+        if (leftButtonText.text != "Resign")
+        {
+            leftButtonText.text = "Resign";
+            leftButton.onClick.RemoveAllListeners();
+            leftButton.onClick.AddListener(Resign);
+        }
+    }
+
+    void Quit()
+    {
+        NetworkManager.Singleton.Shutdown();
+#if UNITY_EDITOR
+        UnityEditor.EditorApplication.isPlaying = false;
+#else
+        Application.Quit();
+#endif
+    }
+
+    void Resign()
+    {
+        ulong clientID = NetworkManager.Singleton.LocalClientId;
+        HandleResignationServerRpc(clientID);
+    }
+    
+    [ServerRpc(RequireOwnership = false)]
+    void HandleResignationServerRpc(ulong clientId)
+    {
+        if (!IsHost)
+            return;
+        
+        if (clientId > 0)
+            GameEndClientRpc(isResignation: true, didWhiteWin: true);
+        else
+            GameEndClientRpc(isResignation: true, didWhiteWin: false);
     }
 
     /// <summary>
@@ -326,7 +372,9 @@ public class GameManager : NetworkBehaviour
         if (newValue)
         {
             BoardManager.Instance.EnsureOnlyPiecesOfSideAreEnabled(IsHost ? Side.White : Side.Black);
-
+            
+            // Has a bug where it will remove move history. It was decided to keep this since it is not a critical bug, and since it is not sent to the client, it keeps it
+            // even and synced.
             NewGameStartedEvent?.Invoke();
         }
         else
@@ -372,24 +420,36 @@ public class GameManager : NetworkBehaviour
     }
 
     [ServerRpc(RequireOwnership = true)]
-    public void StartGameServerRpc(ulong clientId)
+    public void StartGameServerRpc(ulong clientId, bool newGame = false)
     {
         if (!IsHost)
             return;
 
+        if (newGame)
+        {
+            currentPlayerTurn.Value = 0;
+            game = new Game();
+        }
+
         isGameActive.Value = true;
 
         string serialisedGameState = SerializeGame();
+        serialisedGame = serialisedGameState;
 
         StartGameClientRpc(serialisedGameState,
             new ClientRpcParams
                 { Send = new ClientRpcSendParams { TargetClientIds = new List<ulong> { { clientId } } } });
+        
+        leftButtonText.text = "Resign";
+        leftButton.onClick.RemoveAllListeners();
+        leftButton.onClick.AddListener(Resign);
     }
 
     [ClientRpc]
     void StartGameClientRpc(string serialisedGameState, ClientRpcParams clientRpcParams = default)
     {
         Instance.LoadGame(serialisedGameState);
+        serialisedGame = serialisedGameState;
     }
 
     /// <summary>
@@ -398,16 +458,20 @@ public class GameManager : NetworkBehaviour
     [ServerRpc(RequireOwnership = true)]
     public void HandlePlayerDisconnectServerRpc(ulong clientId)
     {
-        if (!IsHost) return;
+        leftButtonText.text = "Quit";
+        leftButton.onClick.RemoveAllListeners();
+        leftButton.onClick.AddListener(Quit);
         
         if (!isGameActive.Value)
             return;
-        
-        // Pause the game or end it
+
+        // Pause the game
         isGameActive.Value = false;
 
         // Notify clients about the disconnection
         PlayerDisconnectedClientRpc(clientId);
+        
+        
     }
 
     /// <summary>
@@ -431,11 +495,11 @@ public class GameManager : NetworkBehaviour
             movedPieceTransform.position = movedPieceTransform.parent.position;
             return;
         }
-        
+
         // Make sure the current board is in sync with the game
         if (serialisedGame != null && SerializeGame() != serialisedGame)
         {
-            LoadGame(serialisedGame);
+            // Dont let the player move since its a previous state
             return;
         }
 
@@ -464,18 +528,28 @@ public class GameManager : NetworkBehaviour
         }
 
         ValidateMoveServerRpc(new SerializedSquare(startSquare.File, startSquare.Rank),
-            new SerializedSquare(endSquare.File, endSquare.Rank),
+            new SerializedSquare(endSquare.File, endSquare.Rank), GetSerializedGame(),
             (byte)CurrentBoard[startSquare.File, startSquare.Rank].GetPieceType(),
             promotionPiece != null ? (byte)promotionPiece.GetPieceType() : (byte)0);
     }
 
     [ServerRpc(RequireOwnership = false)]
-    void ValidateMoveServerRpc(SerializedSquare startSquare, SerializedSquare endSquare, byte pieceTypeByte,
+    void ValidateMoveServerRpc(SerializedSquare startSquare, SerializedSquare endSquare, string clientSerialisedGame,
+        byte pieceTypeByte,
         byte promotionPieceType = 0, ServerRpcParams rpcParams = default)
     {
         // Again, should not be possible
         if (!isGameActive.Value)
             return;
+
+        if (clientSerialisedGame != GetSerializedGame())
+        {
+            ResetGameStateClientRpc(GetSerializedGame(), new ClientRpcParams
+            {
+                Send = new ClientRpcSendParams
+                    { TargetClientIds = new List<ulong> { rpcParams.Receive.SenderClientId } }
+            });
+        }
 
         ulong clientId = rpcParams.Receive.SenderClientId;
 
@@ -487,12 +561,16 @@ public class GameManager : NetworkBehaviour
 
         Square start = new Square(startSquare.File, startSquare.Rank);
         Square end = new Square(endSquare.File, endSquare.Rank);
-        
+
         PieceType originalPieceType = (PieceType)pieceTypeByte;
 
         if (CurrentBoard[startSquare.File, startSquare.Rank].GetPieceType() != originalPieceType)
         {
-            // TODO: Sync the board with the client
+            ResetGameStateClientRpc(GetSerializedGame(), new ClientRpcParams
+            {
+                Send = new ClientRpcSendParams
+                    { TargetClientIds = new List<ulong> { rpcParams.Receive.SenderClientId } }
+            });
             return;
         }
 
@@ -518,9 +596,6 @@ public class GameManager : NetworkBehaviour
             promotionMove.SetPromotionPiece(promotionPiece);
         }
 
-        if (!game.TryExecuteMove(move)) //FIXME: This will likely break the game
-            return;
-
         bool isSpecialMove = move is SpecialMove;
         byte specialMoveType = move is SpecialMove
             ? (byte)((move is CastlingMove) ? 1 :
@@ -545,6 +620,8 @@ public class GameManager : NetworkBehaviour
             }
         }
 
+        game.TryExecuteMove(move);
+
         ExecuteMoveClientRpc(
             new SerialisedMove()
             {
@@ -566,8 +643,14 @@ public class GameManager : NetworkBehaviour
             currentPlayerTurn.Value = currentPlayerTurn.Value == 0 ? 1 : 0;
 
         MoveExecutedEvent?.Invoke();
-        
+
         serialisedGame = SerializeGame();
+    }
+
+    [ClientRpc]
+    void ResetGameStateClientRpc(string serialisedGameState, ClientRpcParams clientRpcParams = default)
+    {
+        LoadGame(serialisedGameState);
     }
 
     [ClientRpc]
@@ -576,7 +659,7 @@ public class GameManager : NetworkBehaviour
         // Return if the client is the host, since the move would already be executed from the server rpc.
         if (IsHost)
             return;
-        
+
         Debug.Log("Client ID: " + NetworkManager.Singleton.LocalClientId);
 
         Square startSquare = new Square(move.StartSquare.File, move.StartSquare.Rank);
@@ -617,17 +700,23 @@ public class GameManager : NetworkBehaviour
         game.TryExecuteMove(new Movement(startSquare, endSquare));
 
         MoveExecutedEvent?.Invoke();
-        
+
         serialisedGame = SerializeGame();
         Debug.Log("Game state: " + serialisedGame);
     }
 
     [ClientRpc]
-    void GameEndClientRpc(bool isCheckMate)
+    void GameEndClientRpc(bool isCheckMate = false, bool isResignation = false, bool didWhiteWin = false)
     {
         BoardManager.Instance.SetActiveAllPieces(false);
 
-        if (isCheckMate)
+        if (isResignation)
+        {
+            string winner = didWhiteWin ? "White" : "Black";
+            string loser = didWhiteWin ? "Black" : "White";
+            UIManager.Instance.ShowMessage($"{loser} Resigned! {winner} wins!");
+        }
+        else if (isCheckMate)
         {
             string winner = currentPlayerTurn.Value == 0 ? "Black" : "White";
             UIManager.Instance.ShowMessage($"Checkmate! {winner} wins!");
@@ -641,6 +730,19 @@ public class GameManager : NetworkBehaviour
         {
             isGameActive.Value = false;
             NetworkManagerHandler.Instance.GameOver();
+            ulong otherClientID = NetworkManager.Singleton.ConnectedClients.Keys.First(id => id != NetworkManager.Singleton.LocalClientId);
+            leftButtonText.text = "New Game";
+            leftButton.onClick.RemoveAllListeners();
+            leftButton.onClick.AddListener(() =>
+            {
+                StartGameServerRpc(otherClientID, true);
+            });
+        }
+        else
+        {
+            leftButtonText.text = "Quit";
+            leftButton.onClick.RemoveAllListeners();
+            leftButton.onClick.AddListener(Quit);
         }
     }
 
@@ -665,8 +767,12 @@ public class GameManager : NetworkBehaviour
             return;
 
         isGameActive.Value = true;
+        
+        leftButtonText.text = "Resign";
+        leftButton.onClick.RemoveAllListeners();
+        leftButton.onClick.AddListener(Resign);
     }
-    
+
     [ServerRpc(RequireOwnership = true)]
     public void SendGameStateServerRpc(ulong clientId)
     {

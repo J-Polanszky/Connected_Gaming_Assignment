@@ -83,7 +83,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
             }
 
             isGameActive = true;
-            GameManager.Instance.StartGameServerRpc(clientId);
+            GameManager.Instance.StartGameServerRpc(clientId, true);
         }
     }
 
@@ -139,19 +139,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
 
                 mainThreadDispatcher.Enqueue(() =>
                 {
-                    Debug.Log("Executing on main thread");
-                    started = true;
-
-                    NetworkManager.Singleton.SceneManager.LoadScene("UnityChessGame",
-                        UnityEngine.SceneManagement.LoadSceneMode.Single);
-
-                    IEnumerator WaitForSceneLoad()
-                    {
-                        yield return new WaitForSeconds(0.5f);
-                        GameManager.Instance.SetGameCode(joinCode);
-                    }
-
-                    StartCoroutine(WaitForSceneLoad());
+                    OnJoinOrHost(joinCode);
                 });
             });
             return;
@@ -168,22 +156,39 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
 
     void JoinGame()
     {
-        string code = joinCodeObj.GetComponent<TMP_InputField>().text;
-        Debug.Log($"Joining game with code: {code}");
-        JoinWithRelay(code).ContinueWith(task =>
+        string joinCode = joinCodeObj.GetComponent<TMP_InputField>().text;
+        Debug.Log($"Joining game with code: {joinCode}");
+        JoinWithRelay(joinCode).ContinueWith(task =>
         {
             if (task.IsFaulted)
             {
                 Debug.LogError($"Failed to join with relay: {task.Exception}");
                 return;
             }
+            
+            mainThreadDispatcher.Enqueue(() =>
+            {
+                OnJoinOrHost(joinCode);
+            });
+        });
+    }
 
-            Debug.Log("Joined game");
-            started = true;
+    void OnJoinOrHost(string joinCode)
+    {
+        Debug.Log("Executing on main thread");
+        started = true;
 
+        if(isHosting)
             NetworkManager.Singleton.SceneManager.LoadScene("UnityChessGame",
                 UnityEngine.SceneManagement.LoadSceneMode.Single);
-        });
+                
+        IEnumerator WaitForSceneLoad()
+        {
+            yield return new WaitForSeconds(0.5f);
+            GameManager.Instance.SetGameCode(joinCode);
+        }
+
+        StartCoroutine(WaitForSceneLoad());
     }
 
     public void IsHostingGame(int choice)
