@@ -26,8 +26,6 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
 
     MainThreadDispatcher mainThreadDispatcher;
 
-    private Guid currentAllocationId;
-
     private void Awake()
     {
         DontDestroyOnLoad(gameObject);
@@ -178,17 +176,21 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         Debug.Log("Executing on main thread");
         started = true;
 
-        if(isHosting)
+        NetworkManager.Singleton.SceneManager.OnLoadComplete += (id, sceneName, mode) =>
+        {
+            if (sceneName == "UnityChessGame")
+            {
+                mainThreadDispatcher.Enqueue(() =>
+                {
+                    GameManager.Instance.SetGameCode(joinCode);
+                });
+                    
+            }
+        };
+        
+        if (isHosting)
             NetworkManager.Singleton.SceneManager.LoadScene("UnityChessGame",
                 UnityEngine.SceneManagement.LoadSceneMode.Single);
-                
-        IEnumerator WaitForSceneLoad()
-        {
-            yield return new WaitForSeconds(0.5f);
-            GameManager.Instance.SetGameCode(joinCode);
-        }
-
-        StartCoroutine(WaitForSceneLoad());
     }
 
     public void IsHostingGame(int choice)
@@ -239,6 +241,8 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
                 await AuthenticationService.Instance.SignInAnonymouslyAsync();
                 Debug.Log($"Signed in as: {AuthenticationService.Instance.PlayerId}");
             }
+            
+            UnityAnalyticsHandler.Instance.OnServicesInitialised();
         }
         catch (Exception e)
         {
@@ -251,8 +255,6 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         try
         {
             Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxConnections);
-            
-            currentAllocationId = allocation.AllocationId;
 
             string joinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
             Debug.Log($"Join code: {joinCode}");
@@ -362,5 +364,21 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
     public void RestartGame()
     {
         isGameActive = true;
+    }
+
+    public void SaveGame(string sessionCode, string serialisedGame)
+    {
+        if (!isHosting)
+            return;
+
+        FirebaseService.Instance.SaveGame(sessionCode, serialisedGame);
+    }
+
+    public async Task<string> LoadGame(string sessionCode)
+    {
+        if (!isHosting)
+            return null;
+        
+        return await FirebaseService.Instance.LoadGame(sessionCode);
     }
 }

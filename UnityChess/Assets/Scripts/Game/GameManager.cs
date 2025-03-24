@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -27,6 +28,7 @@ public class GameManager : NetworkBehaviour
 
     private Button leftButton, rightButton;
     private Text leftButtonText, rightButtonText;
+    private InputField inputField;
 
     // Events signalling various game state changes.
     public static event Action NewGameStartedEvent;
@@ -164,6 +166,7 @@ public class GameManager : NetworkBehaviour
         rightButton = rightButtonObj.GetComponent<Button>();
         leftButtonText = leftButton.transform.GetChild(0).GetComponent<Text>();
         rightButtonText = rightButton.transform.GetChild(0).GetComponent<Text>();
+        inputField = GameObject.FindWithTag("InputField").GetComponent<InputField>();
 
         // // Subscribe to the event triggered when a visual piece is moved.
         // VisualPiece.VisualPieceMoved += OnPieceMoved;
@@ -209,6 +212,13 @@ public class GameManager : NetworkBehaviour
             leftButton.onClick.RemoveAllListeners();
             leftButton.onClick.AddListener(Resign);
         }
+        
+        if (rightButtonText.text != "Save Game")
+        {
+            rightButtonText.text = "Save Game";
+            rightButton.onClick.RemoveAllListeners();
+            rightButton.onClick.AddListener(SaveGame);
+        }
     }
 
     void Quit()
@@ -226,17 +236,25 @@ public class GameManager : NetworkBehaviour
         ulong clientID = NetworkManager.Singleton.LocalClientId;
         HandleResignationServerRpc(clientID);
     }
-    
+
+    void SaveGame()
+    {
+        string sessionCode = inputField.text;
+        NetworkManagerHandler.Instance.SaveGame(sessionCode, serialisedGame);
+    }
+
     [ServerRpc(RequireOwnership = false)]
     void HandleResignationServerRpc(ulong clientId)
     {
         if (!IsHost)
             return;
+
+        bool didWhiteWin = clientId > 0;
         
-        if (clientId > 0)
-            GameEndClientRpc(isResignation: true, didWhiteWin: true);
-        else
-            GameEndClientRpc(isResignation: true, didWhiteWin: false);
+        UnityAnalyticsHandler.Instance.RecordVictory(didWhiteWin,
+            VictoryType.Resignation, gameCodeStr);
+        
+        GameEndClientRpc(isResignation: true, didWhiteWin: didWhiteWin);
     }
 
     /// <summary>
@@ -372,7 +390,7 @@ public class GameManager : NetworkBehaviour
         if (newValue)
         {
             BoardManager.Instance.EnsureOnlyPiecesOfSideAreEnabled(IsHost ? Side.White : Side.Black);
-            
+
             // Has a bug where it will remove move history. It was decided to keep this since it is not a critical bug, and since it is not sent to the client, it keeps it
             // even and synced.
             NewGameStartedEvent?.Invoke();
@@ -409,7 +427,43 @@ public class GameManager : NetworkBehaviour
         };
 
         if (IsHost)
+        {
             SetupInitialGameState();
+
+            IEnumerator DelayedStart()
+            {
+                yield return new WaitForFixedUpdate();
+                
+                rightButtonText.text = "Load Game";
+                rightButton.onClick.RemoveAllListeners();
+                rightButton.onClick.AddListener(() =>
+                {
+                    NetworkManagerHandler.Instance.LoadGame(inputField.text).ContinueWith(
+                        task =>
+                        {
+                            MainThreadDispatcher.Instance.Enqueue(() =>
+                            {
+                                LoadGame(task.Result);
+                                BoardManager.Instance.SetActiveAllPieces(false);
+                            });
+                        });
+                });
+            }
+            
+            StartCoroutine(DelayedStart());
+        }
+
+        else
+        {
+            IEnumerator DelayedStart()
+            {
+                yield return new WaitForFixedUpdate();
+
+                rightButtonText.text = "";
+            }
+            
+            StartCoroutine(DelayedStart());
+        }
     }
 
     void SetupInitialGameState()
@@ -420,7 +474,7 @@ public class GameManager : NetworkBehaviour
     }
 
     [ServerRpc(RequireOwnership = true)]
-    public void StartGameServerRpc(ulong clientId, bool newGame = false)
+    public void StartGameServerRpc(ulong clientId, bool newGame = false, string existingSerialisedGame = "")
     {
         if (!IsHost)
             return;
@@ -429,6 +483,10 @@ public class GameManager : NetworkBehaviour
         {
             currentPlayerTurn.Value = 0;
             game = new Game();
+            NetworkManagerHandler.Instance.RestartGame();
+            
+            if(existingSerialisedGame.Length > 0)
+                LoadGame(existingSerialisedGame);
         }
 
         isGameActive.Value = true;
@@ -439,10 +497,14 @@ public class GameManager : NetworkBehaviour
         StartGameClientRpc(serialisedGameState,
             new ClientRpcParams
                 { Send = new ClientRpcSendParams { TargetClientIds = new List<ulong> { { clientId } } } });
-        
+
         leftButtonText.text = "Resign";
         leftButton.onClick.RemoveAllListeners();
         leftButton.onClick.AddListener(Resign);
+        
+        rightButtonText.text = "Save Game";
+        rightButton.onClick.RemoveAllListeners();
+        rightButton.onClick.AddListener(SaveGame);
     }
 
     [ClientRpc]
@@ -461,7 +523,7 @@ public class GameManager : NetworkBehaviour
         leftButtonText.text = "Quit";
         leftButton.onClick.RemoveAllListeners();
         leftButton.onClick.AddListener(Quit);
-        
+
         if (!isGameActive.Value)
             return;
 
@@ -470,8 +532,6 @@ public class GameManager : NetworkBehaviour
 
         // Notify clients about the disconnection
         PlayerDisconnectedClientRpc(clientId);
-        
-        
     }
 
     /// <summary>
@@ -638,7 +698,11 @@ public class GameManager : NetworkBehaviour
         bool gameEnded = latestHalfMove.CausedCheckmate || latestHalfMove.CausedStalemate;
 
         if (gameEnded)
+        {
             GameEndClientRpc(latestHalfMove.CausedCheckmate);
+            UnityAnalyticsHandler.Instance.RecordVictory(currentPlayerTurn.Value == 0,
+                latestHalfMove.CausedCheckmate ? VictoryType.Checkmate : VictoryType.Stalemate, gameCodeStr);
+        }
         else
             currentPlayerTurn.Value = currentPlayerTurn.Value == 0 ? 1 : 0;
 
@@ -730,12 +794,25 @@ public class GameManager : NetworkBehaviour
         {
             isGameActive.Value = false;
             NetworkManagerHandler.Instance.GameOver();
-            ulong otherClientID = NetworkManager.Singleton.ConnectedClients.Keys.First(id => id != NetworkManager.Singleton.LocalClientId);
+            ulong otherClientID =
+                NetworkManager.Singleton.ConnectedClients.Keys.First(id =>
+                    id != NetworkManager.Singleton.LocalClientId);
             leftButtonText.text = "New Game";
             leftButton.onClick.RemoveAllListeners();
-            leftButton.onClick.AddListener(() =>
+            leftButton.onClick.AddListener(() => { StartGameServerRpc(otherClientID, true); });
+            
+            rightButtonText.text = "Load Game";
+            rightButton.onClick.RemoveAllListeners();
+            rightButton.onClick.AddListener(() =>
             {
-                StartGameServerRpc(otherClientID, true);
+                NetworkManagerHandler.Instance.LoadGame(inputField.text).ContinueWith(
+                    task =>
+                    {
+                        MainThreadDispatcher.Instance.Enqueue(() =>
+                        {
+                            StartGameServerRpc(otherClientID, true, task.Result);
+                        });
+                    });
             });
         }
         else
@@ -767,7 +844,7 @@ public class GameManager : NetworkBehaviour
             return;
 
         isGameActive.Value = true;
-        
+
         leftButtonText.text = "Resign";
         leftButton.onClick.RemoveAllListeners();
         leftButton.onClick.AddListener(Resign);

@@ -5,3 +5,5 @@ CG_MCAST_ASSIGNMENT_2024_2025
 
 # ping system does not work. fix calculations.
 # add host migration?
+# improve ui for saving and loading game
+# when loading game, it starts acting like a client is connected.
