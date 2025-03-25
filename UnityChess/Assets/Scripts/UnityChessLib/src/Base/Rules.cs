@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 
 namespace UnityChess {
 	/// <summary>Contains methods for checking legality of moves and board positions.</summary>
@@ -7,9 +8,46 @@ namespace UnityChess {
 		public static bool IsPlayerCheckmated(Board board, Side player, int numLegalMoves) =>
 			numLegalMoves <= 0 && IsPlayerInCheck(board, player);
 
+		static bool CanPlayersCheckmate(Board board)
+		{
+			List<Piece> whitePiecesList = new();
+			List<Piece> blackPiecesList = new();
+
+			for (int file = 0; file < 8; file++)
+			{
+				for (int rank = 0; rank < 8; rank++)
+				{
+					if (board[file, rank] != null)
+					{
+						if (board[file, rank].Owner == Side.White)
+							whitePiecesList.Add(board[file, rank]);
+						else
+							blackPiecesList.Add(board[file, rank]);
+					}
+				}
+			}
+			
+			if (whitePiecesList.Count > 2 || blackPiecesList.Count > 2)
+				return true;
+
+			foreach (Piece piece in whitePiecesList)
+			{
+				if(piece.GetPieceType() != PieceType.King || piece.GetPieceType() != PieceType.King)
+					return true;
+			}
+			
+			foreach (Piece piece in blackPiecesList)
+			{
+				if(piece.GetPieceType() != PieceType.King || piece.GetPieceType() != PieceType.King)
+					return true;
+			}
+			
+			return false;
+		}
+
 		/// <summary>Checks if the player of the given side has been stalemated.</summary>
 		public static bool IsPlayerStalemated(Board board, Side player, int numLegalMoves) =>
-			numLegalMoves <= 0 && !IsPlayerInCheck(board, player);
+			(numLegalMoves <= 0 && !IsPlayerInCheck(board, player)) || !CanPlayersCheckmate(board);
 
 		/// <summary>Checks if the player of the given side is in check.</summary>
 		public static bool IsPlayerInCheck(Board board, Side player) =>
