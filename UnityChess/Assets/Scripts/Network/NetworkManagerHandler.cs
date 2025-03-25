@@ -31,42 +31,36 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         DontDestroyOnLoad(gameObject);
     }
 
-    void SaveGameState()
+    string SaveGameState()
     {
-        // Save the game state
+        string gameState = GameManager.Instance.GetSerializedGame();
+        GameManager.Instance.EndGameForHostMigration();
+        
+        return gameState;
     }
 
-    // async void MigrateHost()
-    // {
-    //     try
-    //     {
-    //         NetworkManager.Singleton.Shutdown();
-    //     
-    //         Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxConnections);
-    //     
-    //         string joinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
-    //         Debug.Log($"Join code: {joinCode}");
-    //     
-    //         UnityTransport transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
-    //     
-    //         transport.SetRelayServerData(
-    //             allocation.RelayServer.IpV4,
-    //             (ushort)allocation.RelayServer.Port,
-    //             allocation.AllocationIdBytes,
-    //             allocation.Key,
-    //             allocation.ConnectionData
-    //         );
-    //     
-    //         NetworkManager.Singleton.StartHost();
-    //     
-    //         // Display join code
-    //         // TODO:   
-    //     }
-    //     catch (Exception e)
-    //     {
-    //         Debug.LogError($"Failed to migrate host: {e.Message}");
-    //     }
-    // }
+    void MigrateHost(string gameState)
+    {
+        IsHostingGame(0);
+        
+        StartHostWithRelay().ContinueWith(task =>
+        {
+            if (task.IsFaulted)
+            {
+                Debug.LogError($"Failed to start host with relay: {task.Exception}");
+                return;
+            }
+
+            string joinCode = task.Result;
+
+            Debug.Log("Sending join code to main thread");
+
+            mainThreadDispatcher.Enqueue(() =>
+            {
+                OnJoinOrHost(joinCode, gameState);
+            });
+        });
+    }
 
     void OnClientConnected(ulong clientId)
     {
@@ -94,15 +88,17 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         }
 
         // FIXME: This does not work as expected
-        // // check if the client that disconnected was the host
-        // if (clientId == NetworkManager.ServerClientId)
-        // {
-        //     // Save the game state
-        //     SaveGameState();
-        //     // Stop the unity relay server/lobby, and then create a new one with the non-disconnected client as the host
-        //     // AKA Host Migration
-        //     MigrateHost();
-        // }
+        // check if the client that disconnected was the host
+        if (!isHosting && clientId == NetworkManager.ServerClientId && NetworkManager.Singleton.IsConnectedClient)
+        {
+            Debug.Log("Host has disconnected. Initiating host migration...");
+            // Save the game state
+            string gameState = SaveGameState();
+            // Stop the unity relay server/lobby, and then create a new one with the non-disconnected client as the host
+            NetworkManager.Singleton.Shutdown();
+            // AKA Host Migration
+            MigrateHost(gameState);
+        }
     }
 
     public void QuitGame()
@@ -171,7 +167,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         });
     }
 
-    void OnJoinOrHost(string joinCode)
+    void OnJoinOrHost(string joinCode, string gameState = null)
     {
         Debug.Log("Executing on main thread");
         started = true;
@@ -183,6 +179,8 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
                 mainThreadDispatcher.Enqueue(() =>
                 {
                     GameManager.Instance.SetGameCode(joinCode);
+                    if(gameState != null)
+                        GameManager.Instance.LoadGame(gameState);
                 });
                     
             }

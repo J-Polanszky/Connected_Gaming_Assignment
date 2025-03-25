@@ -212,7 +212,7 @@ public class GameManager : NetworkBehaviour
             leftButton.onClick.RemoveAllListeners();
             leftButton.onClick.AddListener(Resign);
         }
-        
+
         if (rightButtonText.text != "Save Game")
         {
             rightButtonText.text = "Save Game";
@@ -250,10 +250,10 @@ public class GameManager : NetworkBehaviour
             return;
 
         bool didWhiteWin = clientId > 0;
-        
+
         UnityAnalyticsHandler.Instance.RecordVictory(didWhiteWin,
             VictoryType.Resignation, gameCodeStr);
-        
+
         GameEndClientRpc(isResignation: true, didWhiteWin: didWhiteWin);
     }
 
@@ -433,7 +433,7 @@ public class GameManager : NetworkBehaviour
             IEnumerator DelayedStart()
             {
                 yield return new WaitForFixedUpdate();
-                
+
                 rightButtonText.text = "Load Game";
                 rightButton.onClick.RemoveAllListeners();
                 rightButton.onClick.AddListener(() =>
@@ -449,7 +449,7 @@ public class GameManager : NetworkBehaviour
                         });
                 });
             }
-            
+
             StartCoroutine(DelayedStart());
         }
 
@@ -461,7 +461,7 @@ public class GameManager : NetworkBehaviour
 
                 rightButtonText.text = "";
             }
-            
+
             StartCoroutine(DelayedStart());
         }
     }
@@ -484,8 +484,8 @@ public class GameManager : NetworkBehaviour
             currentPlayerTurn.Value = 0;
             game = new Game();
             NetworkManagerHandler.Instance.RestartGame();
-            
-            if(existingSerialisedGame.Length > 0)
+
+            if (existingSerialisedGame.Length > 0)
                 LoadGame(existingSerialisedGame);
         }
 
@@ -501,7 +501,7 @@ public class GameManager : NetworkBehaviour
         leftButtonText.text = "Resign";
         leftButton.onClick.RemoveAllListeners();
         leftButton.onClick.AddListener(Resign);
-        
+
         rightButtonText.text = "Save Game";
         rightButton.onClick.RemoveAllListeners();
         rightButton.onClick.AddListener(SaveGame);
@@ -800,7 +800,7 @@ public class GameManager : NetworkBehaviour
             leftButtonText.text = "New Game";
             leftButton.onClick.RemoveAllListeners();
             leftButton.onClick.AddListener(() => { StartGameServerRpc(otherClientID, true); });
-            
+
             rightButtonText.text = "Load Game";
             rightButton.onClick.RemoveAllListeners();
             rightButton.onClick.AddListener(() =>
@@ -862,5 +862,10 @@ public class GameManager : NetworkBehaviour
     void ReceiveGameStateClientRpc(string serialisedGameState, ClientRpcParams clientRpcParams = default)
     {
         LoadGame(serialisedGameState);
+    }
+
+    public void EndGameForHostMigration()
+    {
+        BoardManager.Instance.SetActiveAllPieces(false);
     }
 }
