@@ -1,0 +1,28 @@
+{
+    "avatars": [
+        {
+            "id": "1",
+            "path": "avatar1",
+            "fileType": ".jpg",
+            "price": 2.99
+        },
+        {
+            "id": "2",  
+            "path": "avatar2",
+            "fileType": ".jpg",
+            "price": 3.99
+        },
+        {
+            "id": "3",
+            "path": "avatar3",
+            "fileType": ".jpg",
+            "price": 3.99
+        },
+        {
+            "id": "4",
+            "path": "avatar4",
+            "fileType": ".jpg",
+            "price": 4.99
+        }
+    ]
+}

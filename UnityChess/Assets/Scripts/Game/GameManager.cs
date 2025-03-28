@@ -167,6 +167,10 @@ public class GameManager : NetworkBehaviour
         leftButtonText = leftButton.transform.GetChild(0).GetComponent<Text>();
         rightButtonText = rightButton.transform.GetChild(0).GetComponent<Text>();
         inputField = GameObject.FindWithTag("InputField").GetComponent<InputField>();
+        
+        leftButtonText.text = "Quit";
+        leftButton.onClick.RemoveAllListeners();
+        leftButton.onClick.AddListener(Quit);
 
         // // Subscribe to the event triggered when a visual piece is moved.
         // VisualPiece.VisualPieceMoved += OnPieceMoved;
@@ -224,11 +228,33 @@ public class GameManager : NetworkBehaviour
     void Quit()
     {
         NetworkManager.Singleton.Shutdown();
-#if UNITY_EDITOR
-        UnityEditor.EditorApplication.isPlaying = false;
-#else
-        Application.Quit();
-#endif
+        
+        var eventInfo = typeof(NetworkSceneManager).GetField("OnLoadComplete",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        if (eventInfo != null)
+            eventInfo.SetValue(NetworkManager.Singleton.SceneManager, null);
+        
+        void OnLoadCompleted(ulong id, string sceneName, UnityEngine.SceneManagement.LoadSceneMode mode)
+        {
+            if (sceneName == "Lobby")
+            {
+                Task resetTask = NetworkManagerHandler.Instance.ResetState();
+                resetTask.Wait();  //To make sure this cant cause a deadlock
+            }
+
+            NetworkManager.Singleton.SceneManager.OnLoadComplete -= OnLoadCompleted;
+        }
+
+        NetworkManager.Singleton.SceneManager.OnLoadComplete += OnLoadCompleted;
+        
+        NetworkManager.Singleton.SceneManager.LoadScene("Lobby",
+            UnityEngine.SceneManagement.LoadSceneMode.Single);
+        
+// #if UNITY_EDITOR
+//         UnityEditor.EditorApplication.isPlaying = false;
+// #else
+//         Application.Quit();
+// #endif
     }
 
     void Resign()

@@ -36,7 +36,7 @@ public class FirebaseService : MonoBehaviourSingleton<FirebaseService>
 
     public void SaveGame(string sessionCode, string serialisedGame)
     {
-        DatabaseReference gameRef = _database.GetReference(sessionCode);
+        DatabaseReference gameRef = _database.GetReference("Games/" + sessionCode);
         gameRef.SetValueAsync(serialisedGame).ContinueWith(task =>
         {
             if (task.IsFaulted)
@@ -48,7 +48,7 @@ public class FirebaseService : MonoBehaviourSingleton<FirebaseService>
     
     public async Task<string> LoadGame(string sessionCode)
     {
-        DatabaseReference gameRef = _database.GetReference(sessionCode);
+        DatabaseReference gameRef = _database.GetReference("Games/" + sessionCode);
         DataSnapshot snapshot = await gameRef.GetValueAsync();
         try
         {

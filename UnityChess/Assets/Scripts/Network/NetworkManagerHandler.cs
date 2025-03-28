@@ -198,34 +198,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
 
     async void Start()
     {
-        Button startButton = GameObject.FindWithTag("StartButton").GetComponent<Button>();
-        Button quitButton = GameObject.FindWithTag("QuitButton").GetComponent<Button>();
-        TMP_Dropdown dropDown = GameObject.FindWithTag("Dropdown").GetComponent<TMP_Dropdown>();
-        joinCodeObj = dropDown.transform.parent.Find("JoinCode");
-        title = dropDown.transform.parent.Find("Title").GetComponent<TextMeshProUGUI>();
-
-        GameObject pingCanvas = GameObject.FindWithTag("PingUI");
-        GameObject debugConsole = GameObject.FindWithTag("DebugConsole");
-
-        DontDestroyOnLoad(pingCanvas);
-        DontDestroyOnLoad(debugConsole);
-
-        pingText = pingCanvas.transform.GetChild(0).GetComponent<TextMeshProUGUI>();
-
-        startButton.onClick.AddListener(StartGame);
-        quitButton.onClick.AddListener(QuitGame);
-        dropDown.onValueChanged.AddListener(IsHostingGame);
-        joinCodeObj.gameObject.SetActive(false);
-
-        await InitialiseUnityServices();
-
-        mainThreadDispatcher = MainThreadDispatcher.Instance;
-
-        if (NetworkManager.Singleton != null)
-        {
-            NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
-            NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnect;
-        }
+        await ResetState();
     }
 
     async Task InitialiseUnityServices()
@@ -378,5 +351,41 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
             return null;
         
         return await FirebaseService.Instance.LoadGame(sessionCode);
+    }
+
+    public async Task ResetState()
+    {
+        isHosting = true;
+        started = false;
+        isGameActive = false;
+        
+        Button startButton = GameObject.FindWithTag("StartButton").GetComponent<Button>();
+        Button quitButton = GameObject.FindWithTag("QuitButton").GetComponent<Button>();
+        TMP_Dropdown dropDown = GameObject.FindWithTag("Dropdown").GetComponent<TMP_Dropdown>();
+        joinCodeObj = dropDown.transform.parent.Find("JoinCode");
+        title = dropDown.transform.parent.Find("Title").GetComponent<TextMeshProUGUI>();
+
+        GameObject pingCanvas = GameObject.FindWithTag("PingUI");
+        GameObject debugConsole = GameObject.FindWithTag("DebugConsole");
+
+        DontDestroyOnLoad(pingCanvas);
+        DontDestroyOnLoad(debugConsole);
+
+        pingText = pingCanvas.transform.GetChild(0).GetComponent<TextMeshProUGUI>();
+
+        startButton.onClick.AddListener(StartGame);
+        quitButton.onClick.AddListener(QuitGame);
+        dropDown.onValueChanged.AddListener(IsHostingGame);
+        joinCodeObj.gameObject.SetActive(false);
+
+        await InitialiseUnityServices();
+
+        mainThreadDispatcher = MainThreadDispatcher.Instance;
+
+        if (NetworkManager.Singleton != null)
+        {
+            NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
+            NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnect;
+        }
     }
 }

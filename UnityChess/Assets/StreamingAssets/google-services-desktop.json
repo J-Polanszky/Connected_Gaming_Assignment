@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "986820960141",
+    "project_id": "cg-mcast",
+    "storage_bucket": "cg-mcast.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:986820960141:android:4fa6ca9257e0faea2fe7c4",
+        "android_client_info": {
+          "package_name": "mt.MCAST.Analytics_project"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC7FHXshF2FbwLRLsCJ6OagkZt9j6sWhTc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:986820960141:android:09c3d1d99b726edf2fe7c4",
+        "android_client_info": {
+          "package_name": "mt.Mcast.UnityChess"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC7FHXshF2FbwLRLsCJ6OagkZt9j6sWhTc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
