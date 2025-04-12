@@ -119,7 +119,7 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
         }
 
         // Check if equipped avatar is available locally, download if not
-        if (!string.IsNullOrEmpty(_equippedAvatarId) && _equippedAvatarId != "default")
+        if (!string.IsNullOrEmpty(_equippedAvatarId))
         {
             string avatarFilePath = GetLocalAvatarPath(_equippedAvatarId);
             if (!File.Exists(avatarFilePath))
@@ -190,19 +190,6 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
         // Clear existing dictionary to prevent duplicates
         _avatarDictionary.Clear();
 
-        // Add default avatar
-        if (!_avatarDictionary.ContainsKey("default"))
-        {
-            AvatarData defaultData = new AvatarData
-            {
-                id = "default",
-                path = "default",
-                fileType = ".png",
-                price = 0
-            };
-            _avatarDictionary.Add("default", defaultData);
-        }
-
         for (var i = 0; i < manifest.avatars.Length; i++)
         {
             AvatarData avatarData = manifest.avatars[i];
@@ -218,8 +205,7 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
     {
         if (!_avatarDictionary.ContainsKey(avatarId))
         {
-            Debug.LogWarning($"Avatar {avatarId} not found in manifest");
-            return LoadDefaultAvatar();
+            throw new Exception($"Avatar {avatarId} not found in manifest");
         }
 
         // If preview is already cached in memory, return it
@@ -229,14 +215,6 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
         }
 
         AvatarData avatarData = _avatarDictionary[avatarId];
-
-        // For default avatar, use the resource
-        if (avatarId == "default")
-        {
-            Texture2D defaultTexture = LoadDefaultAvatar();
-            _previewCache[avatarId] = defaultTexture;
-            return defaultTexture;
-        }
 
         // Check if the full avatar is already available locally and owned
         // If so, use that instead of downloading the preview
@@ -277,8 +255,7 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
         }
         catch (Exception e)
         {
-            Debug.LogError($"Failed to download preview for {avatarId}: {e}");
-            return LoadDefaultAvatar();
+            throw new Exception($"Failed to download preview for {avatarId}: {e}");
         }
     }
 
@@ -320,9 +297,6 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
     /// </summary>
     private async Task<bool> EnsureOwnedAvatarIsDownloaded(string avatarId)
     {
-        if (avatarId == "default")
-            return true;
-
         // Only download if owned
         if (!IsAvatarOwned(avatarId))
         {
@@ -375,17 +349,13 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
         if (_userData.equippedAvatar == avatarId)
             return;
 
-        // Ensure avatar is downloaded if it's not the default
-        if (avatarId != "default")
+        bool downloaded = await EnsureOwnedAvatarIsDownloaded(avatarId);
+        if (!downloaded)
         {
-            bool downloaded = await EnsureOwnedAvatarIsDownloaded(avatarId);
-            if (!downloaded)
-            {
-                Debug.LogError($"Failed to download avatar {avatarId}, cannot equip");
-                return;
-            }
+            Debug.LogError($"Failed to download avatar {avatarId}, cannot equip");
+            return;
         }
-
+        
         // Update local data
         _userData.equippedAvatar = avatarId;
         _equippedAvatarId = avatarId;
@@ -431,14 +401,6 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
             return _avatarTextureCache[avatarId];
         }
 
-        // Use default avatar if needed
-        if (string.IsNullOrEmpty(avatarId) || avatarId == "default")
-        {
-            Texture2D defaultTexture = LoadDefaultAvatar();
-            _avatarTextureCache["default"] = defaultTexture;
-            return defaultTexture;
-        }
-
         // Make sure manifest is loaded
         if (!_manifestLoaded)
         {
@@ -447,15 +409,13 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
 
         if (!_avatarDictionary.ContainsKey(avatarId))
         {
-            Debug.LogWarning($"Avatar {avatarId} not found in dictionary, using default");
-            return LoadDefaultAvatar();
+            Debug.LogWarning($"Avatar {avatarId} not found in dictionary");
         }
 
         // Check if owned - only load owned avatars from disk
         if (!IsAvatarOwned(avatarId))
         {
-            Debug.LogWarning($"Avatar {avatarId} is not owned, using default");
-            return LoadDefaultAvatar();
+            Debug.LogWarning($"Avatar {avatarId} is not owned");
         }
 
         string localFilePath = GetLocalAvatarPath(avatarId);
@@ -466,7 +426,7 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
             bool downloaded = await EnsureOwnedAvatarIsDownloaded(avatarId);
             if (!downloaded)
             {
-                return LoadDefaultAvatar();
+                Debug.LogError($"Failed to download avatar {avatarId}, cannot load texture");
             }
         }
 
@@ -484,26 +444,8 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
         }
         catch (Exception e)
         {
-            Debug.LogError($"Error loading avatar texture from disk: {e.Message}");
-            return LoadDefaultAvatar();
+            throw new Exception($"Error loading avatar texture from disk: {e.Message}");
         }
-    }
-
-    /// <summary>
-    /// Loads the default avatar texture
-    /// </summary>
-    public Texture2D LoadDefaultAvatar()
-    {
-        // Load built-in default avatar
-        Texture2D defaultAvatar = Resources.Load<Texture2D>("Avatars/DefaultAvatar");
-        if (defaultAvatar == null)
-        {
-            defaultAvatar = new Texture2D(1, 1);
-            defaultAvatar.SetPixel(0, 0, Color.white);
-            defaultAvatar.Apply();
-        }
-
-        return defaultAvatar;
     }
 
     /// <summary>
@@ -539,7 +481,7 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
             byte[] avatarBytes = await DownloadFileBytes(avatarPath, 100 * 1024); // 100KB limit
             await File.WriteAllBytesAsync(localFilePath, avatarBytes);
             Debug.Log($"Downloaded purchased avatar {avatarId} to {localFilePath}");
-            
+
             _userData.currency -= (int)avatarData.price;
             if (_userData.ownedAvatars == null)
                 _userData.ownedAvatars = new List<string>();

@@ -10,7 +10,7 @@ using UnityEngine;
 [Serializable]
 public class UserAvatarData
 {
-    public List<string> ownedAvatars = new();
+    public List<string> ownedAvatars = new(){"default"};
     public string equippedAvatar = "default";
     public int currency = 1000; // Default starting currency
 }

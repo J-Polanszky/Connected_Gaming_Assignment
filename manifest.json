@@ -1,6 +1,12 @@
 {
     "avatars": [
         {
+            "id": "default",
+            "path": "default",
+            "fileType": ".jpg",
+            "price": 0
+        },
+        {
             "id": "1",
             "path": "avatar1",
             "fileType": ".jpg",

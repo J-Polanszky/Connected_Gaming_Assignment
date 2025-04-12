@@ -181,10 +181,6 @@ public class AvatarShopManager : MonoBehaviour
         int index = 0;
         foreach (var avatarEntry in FirebaseStorageHandler.Instance.AvatarDictionary)
         {
-            // Skip default avatar if it's not in the shop
-            if (avatarEntry.Key == "default")
-                continue;
-
             yield return StartCoroutine(CreateAvatarItem(avatarEntry.Key, avatarEntry.Value, index));
             index++;
         }
