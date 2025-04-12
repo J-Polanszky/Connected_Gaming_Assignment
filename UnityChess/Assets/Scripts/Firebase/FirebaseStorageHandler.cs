@@ -37,7 +37,7 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
     private Dictionary<string, AvatarData> _avatarDictionary = new();
     private Dictionary<string, Texture2D> _previewCache = new(); // Memory-only cache
     private Dictionary<string, Texture2D> _avatarTextureCache = new();
-    private UserAvatarData _userData = new();
+    private UserAvatarData _userData;
 
     private string _equippedAvatarId = "default";
     public string EquippedAvatarId => _equippedAvatarId;

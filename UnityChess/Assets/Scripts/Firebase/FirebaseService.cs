@@ -51,7 +51,7 @@ public class FirebaseService : MonoBehaviourSingleton<FirebaseService>
             if (task.Result == DependencyStatus.Available)
             {
                 FirebaseApp app = FirebaseApp.DefaultInstance;
-                _database = FirebaseDatabase.GetInstance(app, "https://cg-mcast-default-rtdb.europe-west1.firebasedatabase.app");
+                _database = FirebaseDatabase.GetInstance(app, "https://cg-mcast-default-rtdb.europe-west1.firebasedatabase.app/");
                 FirebaseStorageHandler.Instance.OnFirebaseInitialised();
                 
                 Debug.Log("Firebase dependencies resolved successfully.");

@@ -967,7 +967,7 @@ public class GameManager : NetworkBehaviour
     private void OnWhiteAvatarChanged(FixedString128Bytes oldValue, FixedString128Bytes newValue)
     {
         string stringNewValue = newValue.ToString();
-        if (string.IsNullOrEmpty(stringNewValue) || newValue == "default")
+        if (string.IsNullOrEmpty(stringNewValue))
             return;
     
         if (!IsHost) // Client needs to load the host's avatar
@@ -980,13 +980,12 @@ public class GameManager : NetworkBehaviour
     private void OnBlackAvatarChanged(FixedString128Bytes oldValue, FixedString128Bytes newValue)
     {
         string stringNewValue = newValue.ToString();
-        if (string.IsNullOrEmpty(stringNewValue) || stringNewValue == "default")
+        if (string.IsNullOrEmpty(stringNewValue))
             return;
     
         if (IsHost) // Host needs to load the client's avatar
         {
-            Task loadTask = LoadRemoteAvatar(stringNewValue, false);
-            loadTask.Wait();
+            LoadRemoteAvatar(stringNewValue, false);
         }
     }
 

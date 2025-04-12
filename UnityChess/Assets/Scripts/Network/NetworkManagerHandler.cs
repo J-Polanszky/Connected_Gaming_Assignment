@@ -30,6 +30,10 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
 
     private void Awake()
     {
+        if (Instance != this)
+        {
+            Destroy(gameObject);
+        }
         DontDestroyOnLoad(gameObject);
     }
 
@@ -474,7 +478,6 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         {
             NetworkManager.Singleton.OnClientConnectedCallback -= OnClientConnected;
             NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnect;
-            NetworkManager.Singleton.DisconnectClient(NetworkManager.Singleton.LocalClientId);
             NetworkManager.Singleton.Shutdown();
         }
     }
@@ -509,6 +512,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
     {
         if (!string.IsNullOrEmpty(FirebaseService.Instance.UserID))
         {
+            loginPanel = GameObject.FindWithTag("LoginPanel");
             loginPanel.SetActive(false);
         }
         
