@@ -16,13 +16,15 @@ using UnityEngine.UI;
 public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandler>
 {
     [SerializeField] private int maxConnections = 2;
+    private GameObject loginPanel, menuPanel;
 
     bool isHosting = true;
-    private bool started, isGameActive;
+    private bool started, isGameActive, isAuthenticated;
 
     private Transform joinCodeObj;
 
-    private TextMeshProUGUI title, pingText;
+    private TextMeshProUGUI title, pingText, loginStatusText;
+    TMP_InputField usernameInput, passwordInput;
 
     MainThreadDispatcher mainThreadDispatcher;
 
@@ -71,11 +73,48 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
             {
                 GameManager.Instance.ResumeGame();
                 GameManager.Instance.SendGameStateServerRpc(clientId);
+                
+                // Request the client to send their avatar
+                RequestClientAvatarClientRpc(new ClientRpcParams 
+                { 
+                    Send = new ClientRpcSendParams 
+                    { 
+                        TargetClientIds = new List<ulong> { clientId } 
+                    } 
+                });
+                
                 return;
             }
 
             isGameActive = true;
             GameManager.Instance.StartGameServerRpc(clientId, true);
+        }
+    }
+    
+    [ClientRpc]
+    void RequestClientAvatarClientRpc(ClientRpcParams clientRpcParams = default)
+    {
+        if (isHosting)
+            return;
+        
+        // Client sends their avatar to the host
+        StartCoroutine(SendClientAvatar());
+    }
+    
+    IEnumerator SendClientAvatar()
+    {
+        if (FirebaseStorageHandler.Instance != null)
+        {
+            // Get the client's avatar texture
+            Task<Texture2D> avatarTask = FirebaseStorageHandler.Instance.GetCurrentAvatarTexture();
+            yield return new WaitUntil(() => avatarTask.IsCompleted);
+        
+            if (avatarTask.Exception == null && GameManager.Instance != null)
+            {
+                // Set the client's avatar locally and notify the host
+                string avatarId = FirebaseStorageHandler.Instance.EquippedAvatarId;
+                GameManager.Instance.SetAvatar(avatarTask.Result, false, avatarId);
+            }
         }
     }
 
@@ -196,9 +235,124 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         isHosting = choice == 0;
     }
 
+    async void Login()
+    {
+        if (string.IsNullOrEmpty(usernameInput.text))
+        {
+            if (loginStatusText != null)
+                loginStatusText.text = "Username cannot be empty";
+            return;
+        }
+        
+        if (loginStatusText != null)
+            loginStatusText.text = "Signing in...";
+            
+        try
+        {
+            // Sign in with username/password
+            if (!string.IsNullOrEmpty(passwordInput.text))
+            {
+                // Use password-based authentication
+                await AuthenticationService.Instance.SignInWithUsernamePasswordAsync(
+                    usernameInput.text, 
+                    passwordInput.text);
+            }
+            else
+            {
+                // For demo purposes, use anonymous auth but set the player name
+                SignInOptions loginOptions = new SignInOptions
+                {
+                    CreateAccount = true
+                };
+                await AuthenticationService.Instance.SignInAnonymouslyAsync(loginOptions);
+                
+                // Set player name to match username input
+                AuthenticationService.Instance.UpdatePlayerNameAsync(usernameInput.text);
+            }
+            
+            Debug.Log($"Signed in to Unity services as: {AuthenticationService.Instance.PlayerId}");
+            Debug.Log($"Player name: {AuthenticationService.Instance.PlayerName}");
+            
+            FirebaseService.Instance.UserID = AuthenticationService.Instance.PlayerId;
+            loginPanel.SetActive(false);
+            menuPanel.SetActive(true);
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Login failed: {e.Message}");
+            if (loginStatusText != null)
+                loginStatusText.text = "Login failed: " + e.Message;
+        }
+    }
+    
+    async void Register()
+    {
+        
+        if (string.IsNullOrEmpty(usernameInput.text) || string.IsNullOrEmpty(passwordInput.text))
+        {
+            if (loginStatusText != null)
+                loginStatusText.text = "Username and password are required";
+            return;
+        }
+        
+        if (loginStatusText != null)
+            loginStatusText.text = "Creating account...";
+            
+        try
+        {
+            // Sign up with username/password
+            await AuthenticationService.Instance.SignUpWithUsernamePasswordAsync(
+                usernameInput.text, 
+                passwordInput.text);
+                
+            Debug.Log($"Account created and signed in as: {AuthenticationService.Instance.PlayerId}");
+            
+            FirebaseService.Instance.UserID = AuthenticationService.Instance.PlayerId;
+            loginPanel.SetActive(false);
+            menuPanel.SetActive(true);
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Registration failed: {e.Message}");
+            if (loginStatusText != null)
+                loginStatusText.text = "Registration failed: " + e.Message;
+        }
+    }
+
     async void Start()
     {
-        await ResetState();
+        GameObject pingCanvas = GameObject.FindWithTag("PingUI");
+        GameObject debugConsole = GameObject.FindWithTag("DebugConsole");
+        loginPanel = GameObject.FindWithTag("LoginPanel");
+
+        DontDestroyOnLoad(pingCanvas);
+        DontDestroyOnLoad(debugConsole);
+
+        pingText = pingCanvas.transform.GetChild(0).GetComponent<TextMeshProUGUI>();
+        
+        await InitialiseUnityServices();
+        
+        Button loginButton = loginPanel.transform.Find("Login").GetComponent<Button>();
+        Button registerButton = loginPanel.transform.Find("Register").GetComponent<Button>();
+        
+        loginButton.onClick.AddListener(Login);
+        registerButton.onClick.AddListener(Register);
+        
+        usernameInput = loginPanel.transform.Find("Username").GetComponent<TMP_InputField>();
+        passwordInput = loginPanel.transform.Find("Password").GetComponent<TMP_InputField>();
+        loginStatusText = loginPanel.transform.Find("LoginStatus").GetComponent<TextMeshProUGUI>();
+
+        mainThreadDispatcher = MainThreadDispatcher.Instance;
+
+        if (NetworkManager.Singleton != null)
+        {
+            NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
+            NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnect;
+        }
+        
+        ResetState();
+        
+        menuPanel.SetActive(false);
     }
 
     async Task InitialiseUnityServices()
@@ -207,11 +361,11 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         {
             await UnityServices.InitializeAsync();
 
-            if (!AuthenticationService.Instance.IsSignedIn)
-            {
-                await AuthenticationService.Instance.SignInAnonymouslyAsync();
-                Debug.Log($"Signed in as: {AuthenticationService.Instance.PlayerId}");
-            }
+            // if (!AuthenticationService.Instance.IsSignedIn)
+            // {
+            //     await AuthenticationService.Instance.SignInAnonymouslyAsync();
+            //     Debug.Log($"Signed in as: {AuthenticationService.Instance.PlayerId}");
+            // }
             
             UnityAnalyticsHandler.Instance.OnServicesInitialised();
         }
@@ -303,12 +457,10 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
 
     float MeasurePing()
     {
-        //TODO: Test on another PC to see if this works, since with parrelsync it's always 0
         if (NetworkManager.Singleton.IsClient)
         {
             float ping =
-                NetworkManager.Singleton.NetworkConfig.NetworkTransport.GetCurrentRtt(NetworkManager.Singleton
-                    .LocalClientId);
+                NetworkManager.Singleton.NetworkConfig.NetworkTransport.GetCurrentRtt(NetworkManager.ServerClientId);
 
             return ping;
         }
@@ -353,8 +505,13 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         return await FirebaseService.Instance.LoadGame(sessionCode);
     }
 
-    public async Task ResetState()
+    public void ResetState()
     {
+        if (!string.IsNullOrEmpty(FirebaseService.Instance.UserID))
+        {
+            loginPanel.SetActive(false);
+        }
+        
         isHosting = true;
         started = false;
         isGameActive = false;
@@ -364,28 +521,12 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         TMP_Dropdown dropDown = GameObject.FindWithTag("Dropdown").GetComponent<TMP_Dropdown>();
         joinCodeObj = dropDown.transform.parent.Find("JoinCode");
         title = dropDown.transform.parent.Find("Title").GetComponent<TextMeshProUGUI>();
-
-        GameObject pingCanvas = GameObject.FindWithTag("PingUI");
-        GameObject debugConsole = GameObject.FindWithTag("DebugConsole");
-
-        DontDestroyOnLoad(pingCanvas);
-        DontDestroyOnLoad(debugConsole);
-
-        pingText = pingCanvas.transform.GetChild(0).GetComponent<TextMeshProUGUI>();
+        
+        menuPanel = startButton.transform.parent.gameObject;
 
         startButton.onClick.AddListener(StartGame);
         quitButton.onClick.AddListener(QuitGame);
         dropDown.onValueChanged.AddListener(IsHostingGame);
         joinCodeObj.gameObject.SetActive(false);
-
-        await InitialiseUnityServices();
-
-        mainThreadDispatcher = MainThreadDispatcher.Instance;
-
-        if (NetworkManager.Singleton != null)
-        {
-            NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
-            NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnect;
-        }
     }
 }

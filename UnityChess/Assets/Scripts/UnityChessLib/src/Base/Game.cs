@@ -22,15 +22,16 @@ namespace UnityChess {
 		}
 
 		/// <summary>Executes passed move and switches sides; also adds move to history.</summary>
-		public bool TryExecuteMove(Movement move) {
+		public bool TryExecuteMove(Movement move, out Piece capturedPieceEvent) {
 			if (!TryGetLegalMove(move.Start, move.End, out Movement validatedMove)) {
+				capturedPieceEvent = null;
 				return false;
 			}
 
 			//create new copy of previous current board, and execute the move on it
 			BoardTimeline.TryGetCurrent(out Board boardBeforeMove);
 			Board resultingBoard = new Board(boardBeforeMove);
-			resultingBoard.MovePiece(validatedMove);
+			capturedPieceEvent = resultingBoard.MovePiece(validatedMove);
 			BoardTimeline.AddNext(resultingBoard);
 			
 			ConditionsTimeline.TryGetCurrent(out GameConditions conditionsBeforeMove); 

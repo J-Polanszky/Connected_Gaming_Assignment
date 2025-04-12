@@ -2,12 +2,15 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using TMPro;
+using Unity.Collections;
 using Unity.Netcode;
 using UnityChess;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 /// <summary>
@@ -19,8 +22,10 @@ public class GameManager : NetworkBehaviour
 {
     public static GameManager Instance { get; private set; }
 
-    private NetworkVariable<bool> isGameActive = new(false);
-    private NetworkVariable<int> currentPlayerTurn = new(0); // 0 = White, 1 = Black
+    private NetworkVariable<bool> isGameActive = new();
+    private NetworkVariable<int> currentPlayerTurn = new(); // 0 = White, 1 = Black
+    private NetworkVariable<FixedString128Bytes> whiteAvatar = new();
+    private NetworkVariable<FixedString128Bytes> blackAvatar = new();
 
     private Transform gameInfo;
     private string gameCodeStr, serialisedGame;
@@ -29,6 +34,7 @@ public class GameManager : NetworkBehaviour
     private Button leftButton, rightButton;
     private Text leftButtonText, rightButtonText;
     private InputField inputField;
+    private Image white_avatar, black_avatar;
 
     // Events signalling various game state changes.
     public static event Action NewGameStartedEvent;
@@ -159,6 +165,9 @@ public class GameManager : NetworkBehaviour
     {
         gameInfo = GameObject.FindWithTag("GameInfo").transform;
         gameCode = GameObject.FindWithTag("Gamecode").GetComponent<TextMeshProUGUI>();
+        
+        white_avatar = gameInfo.parent.Find("Avatar_White").GetComponent<Image>();
+        black_avatar = gameInfo.parent.Find("Avatar_Black").GetComponent<Image>();
 
         GameObject leftButtonObj = GameObject.FindWithTag("LeftButton");
         GameObject rightButtonObj = GameObject.FindWithTag("RightButton");
@@ -167,7 +176,7 @@ public class GameManager : NetworkBehaviour
         leftButtonText = leftButton.transform.GetChild(0).GetComponent<Text>();
         rightButtonText = rightButton.transform.GetChild(0).GetComponent<Text>();
         inputField = GameObject.FindWithTag("InputField").GetComponent<InputField>();
-        
+
         leftButtonText.text = "Quit";
         leftButton.onClick.RemoveAllListeners();
         leftButton.onClick.AddListener(Quit);
@@ -228,28 +237,34 @@ public class GameManager : NetworkBehaviour
     void Quit()
     {
         NetworkManager.Singleton.Shutdown();
-        
+
         var eventInfo = typeof(NetworkSceneManager).GetField("OnLoadComplete",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            BindingFlags.NonPublic | BindingFlags.Instance);
         if (eventInfo != null)
             eventInfo.SetValue(NetworkManager.Singleton.SceneManager, null);
-        
-        void OnLoadCompleted(ulong id, string sceneName, UnityEngine.SceneManagement.LoadSceneMode mode)
+
+        // Cant do this as he is client.
+        // void OnLoadCompleted(ulong id, string sceneName, UnityEngine.SceneManagement.LoadSceneMode mode)
+        // {
+        //     if (sceneName == "Lobby")
+        //     {
+        //         Task resetTask = NetworkManagerHandler.Instance.ResetState();
+        //         resetTask.Wait();  //To make sure this cant cause a deadlock
+        //     }
+        //
+        //     NetworkManager.Singleton.SceneManager.OnLoadComplete -= OnLoadCompleted;
+        // }
+        //
+        // NetworkManager.Singleton.SceneManager.OnLoadComplete += OnLoadCompleted;
+
+        // NetworkManager.Singleton.SceneManager.LoadScene("Lobby",
+        //     UnityEngine.SceneManagement.LoadSceneMode.Single);
+
+        SceneManager.LoadSceneAsync("Lobby").completed += operation =>
         {
-            if (sceneName == "Lobby")
-            {
-                Task resetTask = NetworkManagerHandler.Instance.ResetState();
-                resetTask.Wait();  //To make sure this cant cause a deadlock
-            }
+            NetworkManagerHandler.Instance.ResetState();
+        };
 
-            NetworkManager.Singleton.SceneManager.OnLoadComplete -= OnLoadCompleted;
-        }
-
-        NetworkManager.Singleton.SceneManager.OnLoadComplete += OnLoadCompleted;
-        
-        NetworkManager.Singleton.SceneManager.LoadScene("Lobby",
-            UnityEngine.SceneManagement.LoadSceneMode.Single);
-        
 // #if UNITY_EDITOR
 //         UnityEditor.EditorApplication.isPlaying = false;
 // #else
@@ -402,6 +417,11 @@ public class GameManager : NetworkBehaviour
         return game.TryGetLegalMovesForPiece(piece, out _);
     }
 
+    public string GetGameCode()
+    {
+        return gameCodeStr;
+    }
+
     public void SetGameCode(string code)
     {
         gameCodeStr = code;
@@ -441,6 +461,8 @@ public class GameManager : NetworkBehaviour
     {
         isGameActive.OnValueChanged += OnGameActiveChanged;
         currentPlayerTurn.OnValueChanged += OnPlayerTurnChanged;
+        whiteAvatar.OnValueChanged += OnWhiteAvatarChanged;
+        blackAvatar.OnValueChanged += OnBlackAvatarChanged;
 
         // Subscribe to the event triggered when a visual piece is moved.
         VisualPiece.VisualPieceMoved += OnNetworkedPieceMoved;
@@ -451,6 +473,8 @@ public class GameManager : NetworkBehaviour
             [GameSerializationType.FEN] = new FENSerializer(),
             [GameSerializationType.PGN] = new PGNSerializer()
         };
+
+        StartCoroutine(InitialiseAvatar());
 
         if (IsHost)
         {
@@ -522,7 +546,7 @@ public class GameManager : NetworkBehaviour
 
         StartGameClientRpc(serialisedGameState,
             new ClientRpcParams
-                { Send = new ClientRpcSendParams { TargetClientIds = new List<ulong> { { clientId } } } });
+                { Send = new ClientRpcSendParams { TargetClientIds = new List<ulong> { clientId } } });
 
         leftButtonText.text = "Resign";
         leftButton.onClick.RemoveAllListeners();
@@ -538,6 +562,9 @@ public class GameManager : NetworkBehaviour
     {
         Instance.LoadGame(serialisedGameState);
         serialisedGame = serialisedGameState;
+        
+        // Identify which avatar needs to be loaded
+        // bool isOpponentWhite = !IsHost;
     }
 
     /// <summary>
@@ -706,10 +733,14 @@ public class GameManager : NetworkBehaviour
             }
         }
 
-        game.TryExecuteMove(move);
+        game.TryExecuteMove(move, out Piece capturedPiece);
 
+        if (capturedPiece != null)
+            UnityAnalyticsHandler.Instance.RecordPieceCaptured(capturedPiece, move,
+                GetGameCode());
+        
         ExecuteMoveClientRpc(
-            new SerialisedMove()
+            new SerialisedMove
             {
                 StartSquare = startSquare,
                 EndSquare = endSquare,
@@ -787,7 +818,7 @@ public class GameManager : NetworkBehaviour
         pieceTransform.SetParent(destTransform);
         pieceTransform.position = destTransform.position;
 
-        game.TryExecuteMove(new Movement(startSquare, endSquare));
+        game.TryExecuteMove(new Movement(startSquare, endSquare), out Piece _);
 
         MoveExecutedEvent?.Invoke();
 
@@ -881,7 +912,7 @@ public class GameManager : NetworkBehaviour
     {
         ReceiveGameStateClientRpc(GetSerializedGame(),
             new ClientRpcParams
-                { Send = new ClientRpcSendParams { TargetClientIds = new List<ulong> { { clientId } } } });
+                { Send = new ClientRpcSendParams { TargetClientIds = new List<ulong> { clientId } } });
     }
 
     [ClientRpc]
@@ -893,5 +924,93 @@ public class GameManager : NetworkBehaviour
     public void EndGameForHostMigration()
     {
         BoardManager.Instance.SetActiveAllPieces(false);
+    }
+    
+    IEnumerator InitialiseAvatar()
+    {
+        if (FirebaseStorageHandler.Instance == null)
+            throw new Exception("FirebaseStorageHandler is null");
+
+        Task<Texture2D> avatarTask = FirebaseStorageHandler.Instance.GetCurrentAvatarTexture();
+        yield return new WaitUntil(() => avatarTask.IsCompleted);
+        
+        if (avatarTask.IsFaulted)
+            throw new Exception("Failed to load avatar texture");
+
+        string avatarID = FirebaseStorageHandler.Instance.EquippedAvatarId;
+        SetAvatar(avatarTask.Result, IsHost, avatarID);
+    }
+    
+    private async Task LoadRemoteAvatar(string avatarId, bool isWhite)
+    {
+        if (FirebaseStorageHandler.Instance == null)
+            return;
+    
+        try
+        {
+            Texture2D avatarTexture = await FirebaseStorageHandler.Instance.GetAvatarTexture(avatarId);
+        
+            // Update the UI without triggering another network update
+            if (isWhite)
+                white_avatar.sprite = Sprite.Create(avatarTexture, new Rect(0, 0, avatarTexture.width, avatarTexture.height),
+                    new Vector2(0.5f, 0.5f));
+            else
+                black_avatar.sprite = Sprite.Create(avatarTexture, new Rect(0, 0, avatarTexture.width, avatarTexture.height),
+                    new Vector2(0.5f, 0.5f));
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Error loading remote avatar {avatarId}: {e.Message}");
+        }
+    }
+    
+    private void OnWhiteAvatarChanged(FixedString128Bytes oldValue, FixedString128Bytes newValue)
+    {
+        string stringNewValue = newValue.ToString();
+        if (string.IsNullOrEmpty(stringNewValue) || newValue == "default")
+            return;
+    
+        if (!IsHost) // Client needs to load the host's avatar
+        {
+            Task loadTask = LoadRemoteAvatar(stringNewValue, true);
+            loadTask.Wait();
+        }
+    }
+
+    private void OnBlackAvatarChanged(FixedString128Bytes oldValue, FixedString128Bytes newValue)
+    {
+        string stringNewValue = newValue.ToString();
+        if (string.IsNullOrEmpty(stringNewValue) || stringNewValue == "default")
+            return;
+    
+        if (IsHost) // Host needs to load the client's avatar
+        {
+            Task loadTask = LoadRemoteAvatar(stringNewValue, false);
+            loadTask.Wait();
+        }
+    }
+
+    [ServerRpc(RequireOwnership = false)]
+    void SetAvatarServerRpc(string avatarURI, bool isWhite)
+    {
+        if (isWhite)
+        {
+            whiteAvatar.Value = avatarURI;
+            return;
+        }
+        blackAvatar.Value = avatarURI;
+    }
+    
+    public void SetAvatar(Texture2D avatar, bool isWhite, string avatarURI = null)
+    {
+        if (isWhite)
+            white_avatar.sprite = Sprite.Create(avatar, new Rect(0, 0, avatar.width, avatar.height),
+                new Vector2(0.5f, 0.5f));
+        else
+            black_avatar.sprite = Sprite.Create(avatar, new Rect(0, 0, avatar.width, avatar.height),
+                new Vector2(0.5f, 0.5f));
+        
+        if(avatarURI != null)
+            SetAvatarServerRpc(avatarURI, isWhite);
     }
 }

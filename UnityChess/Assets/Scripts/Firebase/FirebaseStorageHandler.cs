@@ -18,8 +18,6 @@ public class AvatarManifest
 public class AvatarData
 {
     public string id;
-    // public string name;
-    // public string description;
     public string path;
     public string fileType;
     public float price;
@@ -27,35 +25,57 @@ public class AvatarData
 
 public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHandler>
 {
+    [SerializeField] private GameObject shopCanvas;
+    [SerializeField] private Transform avatarItemsContainer;
+    // [SerializeField] private GameObject loadingIndicator;
+    // [SerializeField] private Button shopButton;
+    // [SerializeField] private Button closeShopButton;
+
     private FirebaseStorage _storage;
-    private StorageReference _ref;
+    private StorageReference _storageRef;
 
     private string _localPath;
+    private bool _shopInitialized = false;
+    private bool _isPurchasing = false;
 
-    Dictionary<string, AvatarData> _avatarDictionary = new Dictionary<string, AvatarData>();
-    Dictionary<string, Texture2D> _previewCache = new Dictionary<string, Texture2D>();
-    Dictionary<string, AvatarData> _ownedAvatars = new Dictionary<string, AvatarData>();
-
-    private AvatarData activeAvatar;
-
-    Transform _previewContainer;
+    // Avatar data collections
+    private Dictionary<string, AvatarData> _avatarDictionary = new Dictionary<string, AvatarData>();
+    private Dictionary<string, Texture2D> _previewCache = new Dictionary<string, Texture2D>();
+    private UserAvatarData _userData = new UserAvatarData();
     
-    public GameObject previewObjectPrefab;
+    public GameObject avatarPreviewPrefab;
+    
+    private string _equippedAvatarId = "default";
+    public string EquippedAvatarId => _equippedAvatarId;
 
-    bool purchasing = false;
-    string selectedAvatarID;
-
-    public string SelectedAvatarID => selectedAvatarID;
-
+    public UserAvatarData UserData
+    {
+        get => _userData;
+        set
+        {
+            _userData = value;
+            if (_userData != null)
+            {
+                _equippedAvatarId = _userData.equippedAvatar;
+            }
+            else
+            {
+                _equippedAvatarId = "default";
+            }
+        }
+    }
+    
     private void Awake()
     {
         if (Instance != this)
         {
             Destroy(gameObject);
+            return;
         }
 
         DontDestroyOnLoad(gameObject);
 
+        // Create local directory for storing avatars
         _localPath = Path.Combine(Application.persistentDataPath, "Avatars");
         if (!Directory.Exists(_localPath))
         {
@@ -65,37 +85,121 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
 
     private void Start()
     {
-        // gs://cg-mcast.firebasestorage.app/
+        // Initialize Firebase components
         _storage = FirebaseStorage.DefaultInstance;
-        _ref = _storage.RootReference;
-        _previewContainer = GameObject.FindWithTag("ShopItems").transform;
-        _previewContainer.parent.gameObject.SetActive(false);
-        previewObjectPrefab = Resources.Load<GameObject>("Shop/AvatarPreview");
+        _storageRef = _storage.RootReference;
+        
+        // Setup shop UI if present
+        // if (shopButton != null)
+        // {
+        //     shopButton.onClick.AddListener(OpenShop);
+        // }
+        //
+        // if (closeShopButton != null)
+        // {
+        //     closeShopButton.onClick.AddListener(CloseShop);
+        // }
+        
+        if (shopCanvas != null)
+        {
+            shopCanvas.SetActive(false);
+        }
+        
+        // Load avatar previews in the background
+        avatarPreviewPrefab = Resources.Load<GameObject>("Shop/AvatarPreview");
+    }
+    
+    /// <summary>
+    /// Opens the avatar shop UI
+    /// </summary>
+    public void OpenShop()
+    {
+        if (shopCanvas != null)
+        {
+            shopCanvas.SetActive(true);
+            
+            if (!_shopInitialized)
+            {
+                StartCoroutine(InitializeShop());
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Closes the avatar shop UI
+    /// </summary>
+    public void CloseShop()
+    {
+        if (shopCanvas != null)
+        {
+            shopCanvas.SetActive(false);
+        }
+    }
+    
+    /// <summary>
+    /// Initializes the shop by loading avatars from Firebase
+    /// </summary>
+    private IEnumerator InitializeShop()
+    {
+        // if (loadingIndicator != null)
+        //     loadingIndicator.SetActive(true);
+            
+        // Clear any existing items
+        foreach (Transform child in avatarItemsContainer)
+        {
+            Destroy(child.gameObject);
+        }
+        
+        // Load avatar manifest
+        Task loadManifestTask = LoadAvatarManifest();
+        yield return new WaitUntil(() => loadManifestTask.IsCompleted);
+        
+        // if (loadingIndicator != null)
+        //     loadingIndicator.SetActive(false);
+            
+        _shopInitialized = true;
     }
 
-    async Task LoadAvatarManifest()
+    /// <summary>
+    /// Loads the avatar manifest from Firebase Storage
+    /// </summary>
+    private async Task LoadAvatarManifest()
     {
-        if(_avatarDictionary.Count > 0)
+        if (_avatarDictionary.Count > 0)
             return;
         
         try
         {
-            byte[] manifestData = await DownloadFileBytes("Avatars/manifest.json", 5 * 1024); // 5KB
+            byte[] manifestData = await DownloadFileBytes("Avatars/manifest.json", 10 * 1024); // 10KB limit
             ProcessManifest(manifestData);
         }
         catch (Exception e)
         {
-            Debug.LogError("Failed to load avatar manifest: " + e);
+            Debug.LogError($"Failed to load avatar manifest: {e}");
         }
     }
 
-    async Task<byte[]> DownloadFileBytes(string path, int size)
+    /// <summary>
+    /// Downloads a file from Firebase Storage as byte array
+    /// </summary>
+    public async Task<byte[]> DownloadFileBytes(string path, long maxSize)
     {
-        StorageReference fileRef = _ref.Child(path);
-        return await fileRef.GetBytesAsync(size);
+        try
+        {
+            StorageReference fileRef = _storageRef.Child(path);
+            return await fileRef.GetBytesAsync(maxSize);
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Error downloading {path}: {e.Message}");
+            throw;
+        }
     }
 
-    void ProcessManifest(byte[] data)
+    /// <summary>
+    /// Processes the avatar manifest JSON and creates preview items
+    /// </summary>
+    private void ProcessManifest(byte[] data)
     {
         string json = System.Text.Encoding.UTF8.GetString(data);
         AvatarManifest manifest = JsonUtility.FromJson<AvatarManifest>(json);
@@ -110,104 +214,339 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
         {
             AvatarData avatarData = manifest.avatars[i];
             _avatarDictionary.Add(avatarData.id, avatarData);
-            StartCoroutine(LoadPreview(avatarData, (byte)i));
+            StartCoroutine(LoadPreview(avatarData, i));
         }
     }
 
-    async Task<Texture2D> LoadImageFromDisk(string path)
-    {
-        byte[] imageData = await File.ReadAllBytesAsync(path);
-        Texture2D texture = new Texture2D(1, 1);
-        texture.LoadImage(imageData);
-        return texture;
-    }
-
-    IEnumerator LoadPreview(AvatarData avatarData, byte idx)
+    /// <summary>
+    /// Loads a preview image for an avatar and creates a UI element
+    /// </summary>
+    private IEnumerator LoadPreview(AvatarData avatarData, int index)
     {
         string previewPath = $"Avatars/{avatarData.path}_preview{avatarData.fileType}";
 
         if (!_previewCache.ContainsKey(avatarData.id))
         {
-            // Get the preview image from firebase storage
-            Task<byte[]> downloadTask = DownloadFileBytes(previewPath, 20 * 1024); // 20KB
+            // Download preview image
+            Task<byte[]> downloadTask = DownloadFileBytes(previewPath, 20 * 1024); // 20KB limit
             yield return new WaitUntil(() => downloadTask.IsCompleted);
-            // turn downloadTask into a texture
+            
+            if (downloadTask.Exception != null)
+            {
+                Debug.LogError($"Failed to download preview for {avatarData.id}: {downloadTask.Exception}");
+                yield break;
+            }
+            
+            // Create texture from downloaded bytes
             Texture2D loadedTexture = new Texture2D(1, 1);
             loadedTexture.LoadImage(downloadTask.Result);
             _previewCache.Add(avatarData.id, loadedTexture);
         }
 
+        // Create preview item in shop UI
         Texture2D texture = _previewCache[avatarData.id];
-        GameObject previewObject = Instantiate(previewObjectPrefab, _previewContainer);
-        previewObject.GetComponent<Image>().sprite = Sprite.Create(texture,
-            new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
-        previewObject.GetComponent<Button>().onClick.AddListener(() => { PurchaseAvatar(avatarData.id); });
+        GameObject previewObject = Instantiate(avatarPreviewPrefab, avatarItemsContainer);
+        
+        // Setup the preview image
+        Image previewImage = previewObject.GetComponent<Image>();
+        previewImage.sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), 
+            new Vector2(0.5f, 0.5f));
+            
+        // Setup purchase/equip button
+        Button button = previewObject.GetComponent<Button>();
+        bool isOwned = _userData.ownedAvatars.ContainsKey(avatarData.id) && _userData.ownedAvatars[avatarData.id];
+        bool isEquipped = _userData.equippedAvatar == avatarData.id;
+        
+        // Setup UI elements based on ownership status
+        TextMeshProUGUI buttonText = button.GetComponentInChildren<TextMeshProUGUI>();
+        if (isOwned)
+        {
+            if (isEquipped)
+            {
+                buttonText.text = "EQUIPPED";
+                button.interactable = false;
+            }
+            else
+            {
+                buttonText.text = "EQUIP";
+                button.onClick.AddListener(() => EquipAvatar(avatarData.id));
+            }
+        }
+        else
+        {
+            buttonText.text = $"{avatarData.price} COINS";
+            button.onClick.AddListener(() => PurchaseAvatar(avatarData.id));
+        }
+        
+        // Position the item in the grid
         RectTransform rectTransform = previewObject.GetComponent<RectTransform>();
-        rectTransform.anchorMin = new Vector2(0, 1);
-        rectTransform.anchorMax = new Vector2(0, 1);
-        rectTransform.pivot = new Vector2(0, 1);
-        rectTransform.anchoredPosition = Vector2.zero;
-        // Move to the right based on the idx provided
-        rectTransform.anchoredPosition += new Vector2(0, -idx * 200);
-
-        TextMeshProUGUI priceText = previewObject.GetComponentInChildren<TextMeshProUGUI>();
-        priceText.text = $"{avatarData.price}sc";
+        float itemHeight = 200f;
+        float itemWidth = 200f;
+        int itemsPerRow = 3;
+        
+        int row = index / itemsPerRow;
+        int col = index % itemsPerRow;
+        
+        rectTransform.anchoredPosition = new Vector2(col * itemWidth, -row * itemHeight);
     }
 
-    void PurchaseAvatar(string id)
+    /// <summary>
+    /// Purchases an avatar using in-game currency
+    /// </summary>
+    public async Task PurchaseAvatar(string avatarId)
     {
-        if (purchasing)
+        if (_isPurchasing || !_avatarDictionary.ContainsKey(avatarId))
             return;
 
-        purchasing = true;
-
-        if (_avatarDictionary.ContainsKey(id))
+        _isPurchasing = true;
+        
+        try
         {
-            Debug.Log($"User already owns avatar {id}");
-            purchasing = false;
-            selectedAvatarID = id;
-            return;
+            AvatarData avatarData = _avatarDictionary[avatarId];
+            
+            // For now, force purchase to succeed (we'll add currency check later)
+            // TODO:
+            bool purchaseSuccessful = true;
+            
+            if (purchaseSuccessful)
+            {
+                // Download the full avatar
+                string avatarPath = $"Avatars/{avatarData.path}{avatarData.fileType}";
+                await DownloadAvatar(avatarPath, avatarId);
+                
+                // Update user data
+                _userData.ownedAvatars[avatarId] = true;
+                // await SaveUserAvatarData();
+                await FirebaseService.Instance.SaveUserAvatarData( _userData);
+                
+                // Refresh shop UI
+                _shopInitialized = false;
+                StartCoroutine(InitializeShop());
+                
+                Debug.Log($"Successfully purchased avatar: {avatarId}");
+            }
+            else
+            {
+                Debug.Log("Not enough currency to purchase avatar");
+            }
         }
-
-        // Purchase logic
-        float cost = _avatarDictionary[id].price;
-        if (cost > 0) // Check user currency
+        catch (Exception e)
         {
-            Debug.Log($"Purchased avatar {id} for {cost}sc");
-            string avatarPath =
-                Path.Combine($"Avatars/{_avatarDictionary[id].path}{_avatarDictionary[id].fileType}");
-            Task downloadTask = DownloadAvatar(id, avatarPath);
-            return;
+            Debug.LogError($"Error purchasing avatar: {e.Message}");
         }
-
-        purchasing = false;
+        
+        _isPurchasing = false;
     }
 
-    async Task DownloadAvatar(string id, string avatarPath)
+    /// <summary>
+    /// Equips an avatar that the user owns
+    /// </summary>
+    public async void EquipAvatar(string avatarId)
+    {
+        if (!_userData.ownedAvatars.ContainsKey(avatarId) || !_userData.ownedAvatars[avatarId])
+        {
+            Debug.LogWarning($"Cannot equip avatar {avatarId} - not owned");
+            return;
+        }
+        
+        _userData.equippedAvatar = avatarId;
+        _equippedAvatarId = avatarId;
+        
+        // await SaveUserAvatarData();
+        await FirebaseService.Instance.SaveUserAvatarData(_userData);
+        
+        // Refresh shop UI
+        _shopInitialized = false;
+        StartCoroutine(InitializeShop());
+        
+        // Notify GameManager that avatar changed
+        if (GameManager.Instance != null)
+        {
+            Texture2D avatarTexture = await GetCurrentAvatarTexture();
+            GameManager.Instance.SetAvatar(avatarTexture, true, _equippedAvatarId);
+        }
+        
+        Debug.Log($"Equipped avatar: {avatarId}");
+    }
+
+    /// <summary>
+    /// Downloads an avatar file from Firebase Storage
+    /// </summary>
+    private async Task DownloadAvatar(string avatarPath, string avatarId)
     {
         try
         {
-            byte[] avatarData = await DownloadFileBytes($"Avatars/{avatarPath}", 50 * 1024); // 50KB
-            await File.WriteAllBytesAsync(Path.Combine(_localPath, avatarPath), avatarData);
-            _ownedAvatars.Add(id, _avatarDictionary[id]);
-        } catch (ArgumentException e)
+            string localFilePath = Path.Combine(_localPath, Path.GetFileName(avatarPath));
+            
+            // Download the avatar if it doesn't exist locally
+            if (!File.Exists(localFilePath))
+            {
+                byte[] avatarData = await DownloadFileBytes(avatarPath, 50 * 1024); // 50KB limit
+                await File.WriteAllBytesAsync(localFilePath, avatarData);
+            }
+        }
+        catch (Exception e)
         {
-            Debug.LogError("Failed to add avatar to owned avatars: " + e);
+            Debug.LogError($"Error downloading avatar: {e.Message}");
+            throw;
         }
     }
 
-    public async Task<Texture2D> LoadAvatarImage(string path)
+    /// <summary>
+    /// Gets the texture for the currently equipped avatar
+    /// </summary>
+    public async Task<Texture2D> GetCurrentAvatarTexture()
     {
-        string localPath = Path.Combine(_localPath, path);
-        if (!File.Exists(localPath))
+        if (string.IsNullOrEmpty(_userData.equippedAvatar) || _userData.equippedAvatar == "default")
         {
-            // Download the avatar
-            byte[] avatarData = await DownloadFileBytes($"Avatars/{path}", 50 * 1024); // 50KB
-            Texture2D texture = new Texture2D(1, 1);
-            texture.LoadImage(avatarData);
-            return texture;
+            // Return default avatar
+            return LoadDefaultAvatar();
         }
-
-        return await LoadImageFromDisk(localPath);
+        
+        if (!_avatarDictionary.ContainsKey(_userData.equippedAvatar))
+        {
+            Debug.LogWarning($"Avatar {_userData.equippedAvatar} not found in dictionary, using default");
+            return LoadDefaultAvatar();
+        }
+        
+        AvatarData avatarData = _avatarDictionary[_userData.equippedAvatar];
+        string avatarPath = $"Avatars/{avatarData.path}{avatarData.fileType}";
+        string localFilePath = Path.Combine(_localPath, Path.GetFileName(avatarPath));
+        
+        // Download if not cached locally
+        if (!File.Exists(localFilePath))
+        {
+            await DownloadAvatar(avatarPath, _userData.equippedAvatar);
+        }
+        
+        // Load from local path
+        Texture2D texture = new Texture2D(1, 1);
+        byte[] fileData = await File.ReadAllBytesAsync(localFilePath);
+        texture.LoadImage(fileData);
+        
+        return texture;
     }
+
+    /// <summary>
+    /// Gets the texture for a specific avatar by ID
+    /// </summary>
+    public async Task<Texture2D> GetAvatarTexture(string avatarId)
+    {
+        if (string.IsNullOrEmpty(avatarId) || avatarId == "default" || !_avatarDictionary.ContainsKey(avatarId))
+        {
+            return LoadDefaultAvatar();
+        }
+        
+        AvatarData avatarData = _avatarDictionary[avatarId];
+        string avatarPath = $"Avatars/{avatarData.path}{avatarData.fileType}";
+        string localFilePath = Path.Combine(_localPath, Path.GetFileName(avatarPath));
+        
+        // Download if not cached locally
+        if (!File.Exists(localFilePath))
+        {
+            await DownloadAvatar(avatarPath, avatarId);
+        }
+        
+        // Load from local path
+        Texture2D texture = new Texture2D(1, 1);
+        byte[] fileData = await File.ReadAllBytesAsync(localFilePath);
+        texture.LoadImage(fileData);
+        
+        return texture;
+    }
+
+    /// <summary>
+    /// Loads the default avatar texture
+    /// </summary>
+    private Texture2D LoadDefaultAvatar()
+    {
+        // Load built-in default avatar
+        Texture2D defaultAvatar = Resources.Load<Texture2D>("Avatars/DefaultAvatar");
+        if (defaultAvatar == null)
+        {
+            defaultAvatar = new Texture2D(1, 1);
+            defaultAvatar.SetPixel(0, 0, Color.white);
+            defaultAvatar.Apply();
+        }
+        return defaultAvatar;
+    }
+
+    // /// <summary>
+    // /// Loads user avatar data from Firebase Database
+    // /// </summary>
+    // private async Task LoadUserAvatarData()
+    // {
+    //     try
+    //     {
+    //         if (!AuthenticationService.Instance.IsSignedIn)
+    //         {
+    //             Debug.LogWarning("User not signed in, using default avatar data");
+    //             InitializeDefaultUserData();
+    //             return;
+    //         }
+    //         
+    //         string userId = AuthenticationService.Instance.PlayerId;
+    //         DatabaseReference userRef = _databaseRef.Child("users").Child(userId).Child("avatars");
+    //         
+    //         DataSnapshot snapshot = await userRef.GetValueAsync();
+    //         if (snapshot.Exists)
+    //         {
+    //             string json = snapshot.GetRawJsonValue();
+    //             _userData = JsonUtility.FromJson<UserAvatarData>(json) ?? new UserAvatarData();
+    //             
+    //             if (_userData.ownedAvatars == null)
+    //                 _userData.ownedAvatars = new Dictionary<string, bool>();
+    //                 
+    //             // Set equipped avatar ID
+    //             _equippedAvatarId = _userData.equippedAvatar;
+    //         }
+    //         else
+    //         {
+    //             InitializeDefaultUserData();
+    //             await SaveUserAvatarData();
+    //         }
+    //     }
+    //     catch (Exception e)
+    //     {
+    //         Debug.LogError($"Error loading user avatar data: {e.Message}");
+    //         InitializeDefaultUserData();
+    //     }
+    // }
+    //
+    // /// <summary>
+    // /// Initializes default user data for new users
+    // /// </summary>
+    // private void InitializeDefaultUserData()
+    // {
+    //     _userData = new UserAvatarData();
+    //     _userData.ownedAvatars = new Dictionary<string, bool>();
+    //     _userData.ownedAvatars["default"] = true;
+    //     _userData.equippedAvatar = "default";
+    //     _equippedAvatarId = "default";
+    // }
+    //
+    // /// <summary>
+    // /// Saves user avatar data to Firebase Database
+    // /// </summary>
+    // private async Task SaveUserAvatarData()
+    // {
+    //     if (!AuthenticationService.Instance.IsSignedIn)
+    //     {
+    //         Debug.LogWarning("User not signed in, cannot save avatar data");
+    //         return;
+    //     }
+    //     
+    //     try
+    //     {
+    //         string userId = AuthenticationService.Instance.PlayerId;
+    //         string json = JsonUtility.ToJson(_userData);
+    //         
+    //         await _databaseRef.Child("users").Child(userId).Child("avatars").SetRawJsonValueAsync(json);
+    //         Debug.Log("User avatar data saved successfully");
+    //     }
+    //     catch (Exception e)
+    //     {
+    //         Debug.LogError($"Error saving user avatar data: {e.Message}");
+    //     }
+    // }
 }

@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
 using Unity.Services.Analytics;
+using UnityChess;
 using UnityEngine;
 
 public enum VictoryType
@@ -31,6 +32,21 @@ public class UnityAnalyticsHandler : MonoBehaviourSingleton<UnityAnalyticsHandle
         AnalyticsService.Instance.StartDataCollection();
     }
 
+    public void RecordPieceCaptured(Piece piece, Movement move, string gameCode)
+    {
+        PieceCapturedEvent pieceCapturedEvent = new PieceCapturedEvent
+        {
+            PieceType = piece.GetPieceType().ToString(),
+            PieceOwner = piece.Owner.ToString(),
+            CaptureSquare = move.End.ToString(),
+            FromSquare = move.Start.ToString(),
+            GameCode = gameCode
+        };
+        
+        print(pieceCapturedEvent.ToString());
+        // AnalyticsService.Instance.RecordEvent(pieceCapturedEvent);
+    }
+    
     public void RecordVictory(bool didWhiteWin, VictoryType victoryType, string gameCode)
     {
         string winner = didWhiteWin ? "White" : "Black";
@@ -43,6 +59,6 @@ public class UnityAnalyticsHandler : MonoBehaviourSingleton<UnityAnalyticsHandle
             GameCode = gameCode
         };
         
-        AnalyticsService.Instance.RecordEvent(victoryEvent);
+        // AnalyticsService.Instance.RecordEvent(victoryEvent);
     }
 }
