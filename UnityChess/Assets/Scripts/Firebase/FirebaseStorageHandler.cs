@@ -18,7 +18,7 @@ public class AvatarData
     public string id;
     public string path;
     public string fileType;
-    public float price;
+    public int price;
 }
 
 /// <summary>
@@ -539,14 +539,15 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
             byte[] avatarBytes = await DownloadFileBytes(avatarPath, 100 * 1024); // 100KB limit
             await File.WriteAllBytesAsync(localFilePath, avatarBytes);
             Debug.Log($"Downloaded purchased avatar {avatarId} to {localFilePath}");
-
-            // Only after successful download, deduct currency and mark as owned
+            
             _userData.currency -= (int)avatarData.price;
             if (_userData.ownedAvatars == null)
                 _userData.ownedAvatars = new List<string>();
 
             _userData.ownedAvatars.Add(avatarId);
 
+            // Send purchase event to analytics
+            UnityAnalyticsHandler.Instance.RecordPurchase(FirebaseService.Instance.UserID, avatarId, avatarData.price);
             // Save changes to database
             await FirebaseService.Instance.SaveUserAvatarData(_userData);
 

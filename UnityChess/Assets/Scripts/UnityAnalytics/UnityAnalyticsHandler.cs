@@ -61,4 +61,17 @@ public class UnityAnalyticsHandler : MonoBehaviourSingleton<UnityAnalyticsHandle
         
         // AnalyticsService.Instance.RecordEvent(victoryEvent);
     }
+
+    public void RecordPurchase(string userID, string itemID, int price)
+    {
+        DLC_PurchaseEvent purchaseEvent = new DLC_PurchaseEvent
+        {
+            UserID = userID,
+            DLCID = itemID,
+            Price = price,
+            TimeStamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+        };
+        
+        // AnalyticsService.Instance.RecordEvent(purchaseEvent);
+    }
 }
