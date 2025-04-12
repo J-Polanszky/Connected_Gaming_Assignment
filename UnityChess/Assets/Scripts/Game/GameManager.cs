@@ -603,7 +603,7 @@ public class GameManager : NetworkBehaviour
         Debug.Log($"Player {clientId} disconnected. Game paused.");
     }
 
-    void OnNetworkedPieceMoved(Square startSquare, Transform movedPieceTransform,
+    async void OnNetworkedPieceMoved(Square startSquare, Transform movedPieceTransform,
         Transform closestBoardSquareTransform, Piece promotionPiece = null)
     {
         // Don't process moves if game isn't active
@@ -645,11 +645,23 @@ public class GameManager : NetworkBehaviour
 #endif
             return;
         }
+        
 
-        ValidateMoveServerRpc(new SerializedSquare(startSquare.File, startSquare.Rank),
-            new SerializedSquare(endSquare.File, endSquare.Rank), GetSerializedGame(),
-            (byte)CurrentBoard[startSquare.File, startSquare.Rank].GetPieceType(),
-            promotionPiece != null ? (byte)promotionPiece.GetPieceType() : (byte)0);
+        if (move is not SpecialMove specialMove || await TryHandleSpecialMoveBehaviourAsync(specialMove))
+        {
+            if (move is SpecialMove)
+            {
+                if (move is PromotionMove promotionMove)
+                {
+                    promotionPiece = promotionMove.PromotionPiece;
+                }
+            }
+            
+            ValidateMoveServerRpc(new SerializedSquare(startSquare.File, startSquare.Rank),
+                new SerializedSquare(endSquare.File, endSquare.Rank), GetSerializedGame(),
+                (byte)CurrentBoard[startSquare.File, startSquare.Rank].GetPieceType(),
+                promotionPiece != null ? (byte)promotionPiece.GetPieceType() : (byte)0);
+        }
     }
 
     [ServerRpc(RequireOwnership = false)]
@@ -799,10 +811,12 @@ public class GameManager : NetworkBehaviour
 
         Transform pieceTransform = pieceGo.transform;
         Transform destTransform = BoardManager.Instance.GetSquareGOByPosition(endSquare).transform;
-
+        
+        Movement movement = null;
+        
         if (move.IsSpecialMove)
         {
-            SpecialMove specialMove = move.SpecialMoveType switch
+            movement = move.SpecialMoveType switch
             {
                 // Castle takes king square, end square and rook square
                 // En passant takes attacking pawn position, end, and captured pawn position
@@ -816,15 +830,37 @@ public class GameManager : NetworkBehaviour
                 _ => null
             };
 
-            TryHandleSpecialMoveBehaviourAsync(specialMove).Wait();
+            if (movement is PromotionMove promotionMove)
+            {
+                Piece promotionPiece = move.PromotionPieceType switch
+                {
+                    (byte)PieceType.Queen => new Queen(SideToMove),
+                    (byte)PieceType.Rook => new Rook(SideToMove),
+                    (byte)PieceType.Bishop => new Bishop(SideToMove),
+                    (byte)PieceType.Knight => new Knight(SideToMove),
+                    _ => null
+                };
+                
+                if (promotionPiece == null)
+                {
+                    Debug.LogError("Promotion piece is null");
+                }
+                
+                promotionMove.SetPromotionPiece(promotionPiece);
+                movement = promotionMove;
+            }
+        }
+        else
+        {
+            movement = new Movement(startSquare, endSquare);
         }
 
-        BoardManager.Instance.TryDestroyVisualPiece(endSquare);
+        // BoardManager.Instance.TryDestroyVisualPiece(endSquare);
+        //
+        // pieceTransform.SetParent(destTransform);
+        // pieceTransform.position = destTransform.position;
 
-        pieceTransform.SetParent(destTransform);
-        pieceTransform.position = destTransform.position;
-
-        game.TryExecuteMove(new Movement(startSquare, endSquare), out Piece _);
+        game.TryExecuteMove(movement, out Piece _, true);
 
         MoveExecutedEvent?.Invoke();
 

@@ -6,4 +6,3 @@ CG_MCAST_ASSIGNMENT_2024_2025
 # add host migration? (Likely wont do).
 # improve ui for saving and loading game (Low prio).
 # when loading game, it starts acting like a client is connected. (Is fixed most likely. to test further)
-# Promotion move is broken.
