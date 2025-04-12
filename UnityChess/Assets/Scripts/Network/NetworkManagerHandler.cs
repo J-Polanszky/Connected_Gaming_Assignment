@@ -271,7 +271,6 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
             }
             
             Debug.Log($"Signed in to Unity services as: {AuthenticationService.Instance.PlayerId}");
-            Debug.Log($"Player name: {AuthenticationService.Instance.PlayerName}");
             
             FirebaseService.Instance.UserID = AuthenticationService.Instance.PlayerId;
             loginPanel.SetActive(false);
@@ -341,6 +340,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         usernameInput = loginPanel.transform.Find("Username").GetComponent<TMP_InputField>();
         passwordInput = loginPanel.transform.Find("Password").GetComponent<TMP_InputField>();
         loginStatusText = loginPanel.transform.Find("LoginStatus").GetComponent<TextMeshProUGUI>();
+        loginPanel.transform.Find("Exit").GetComponent<Button>().onClick.AddListener(QuitGame);
 
         mainThreadDispatcher = MainThreadDispatcher.Instance;
 
@@ -491,8 +491,8 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
 
     public void SaveGame(string sessionCode, string serialisedGame)
     {
-        if (!isHosting)
-            return;
+        // if (!isHosting)
+        //     return;
 
         FirebaseService.Instance.SaveGame(sessionCode, serialisedGame);
     }

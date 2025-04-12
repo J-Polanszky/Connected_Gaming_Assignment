@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Firebase;
-using Firebase.Auth;
 using Firebase.Database;
 using Firebase.Extensions;
 using UnityEngine;
@@ -11,18 +10,18 @@ using UnityEngine;
 [Serializable]
 public class UserAvatarData
 {
-    public Dictionary<string, bool> ownedAvatars = new();
-    public string equippedAvatar;
-    public int currency = 100; // Default starting currency
+    public List<string> ownedAvatars = new();
+    public string equippedAvatar = "default";
+    public int currency = 1000; // Default starting currency
 }
 
 public class FirebaseService : MonoBehaviourSingleton<FirebaseService>
 {
     private FirebaseDatabase _database;
-    private FirebaseAuth _auth;
-    private FirebaseUser _user;
 
     private string userID = string.Empty;
+    
+    public static event Action<UserAvatarData> OnUserDataLoaded;
     
     public string UserID
     {
@@ -52,8 +51,8 @@ public class FirebaseService : MonoBehaviourSingleton<FirebaseService>
             if (task.Result == DependencyStatus.Available)
             {
                 FirebaseApp app = FirebaseApp.DefaultInstance;
-                _database = FirebaseDatabase.GetInstance(app, "https://cg-mcast-default-rtdb.europe-west1.firebasedatabase.app/");
-                _auth = FirebaseAuth.DefaultInstance;
+                _database = FirebaseDatabase.GetInstance(app, "https://cg-mcast-default-rtdb.europe-west1.firebasedatabase.app");
+                FirebaseStorageHandler.Instance.OnFirebaseInitialised();
                 
                 Debug.Log("Firebase dependencies resolved successfully.");
             }
@@ -67,7 +66,8 @@ public class FirebaseService : MonoBehaviourSingleton<FirebaseService>
     public async Task SaveUserAvatarData(UserAvatarData avatarData)
     {
         DatabaseReference userRef = _database.GetReference("Users/" + UserID);
-        await userRef.SetRawJsonValueAsync(JsonUtility.ToJson(avatarData));
+        string json = JsonUtility.ToJson(avatarData);
+        await userRef.SetRawJsonValueAsync(json);
     }
     
     void LoadUserAvatarData()
@@ -85,19 +85,14 @@ public class FirebaseService : MonoBehaviourSingleton<FirebaseService>
                 if (snapshot.Exists)
                 {
                     UserAvatarData userAvatarData = JsonUtility.FromJson<UserAvatarData>(snapshot.GetRawJsonValue());
-                    FirebaseStorageHandler.Instance.UserData = userAvatarData;
+                    OnUserDataLoaded?.Invoke(userAvatarData);;
                     Debug.Log("User data loaded successfully: " + userAvatarData);
                 }
                 else
                 {
                     Debug.Log("No data available for this user.");
                     // Initialize with default data
-                    UserAvatarData newUserAvatarData = new UserAvatarData
-                    {
-                        ownedAvatars = new Dictionary<string, bool>(),
-                        equippedAvatar = "default_avatar",
-                        currency = 100
-                    };
+                    UserAvatarData newUserAvatarData = new UserAvatarData();
                     FirebaseStorageHandler.Instance.UserData = newUserAvatarData;
                     SaveUserAvatarData(newUserAvatarData).ContinueWith(saveTask =>
                     {
@@ -115,9 +110,9 @@ public class FirebaseService : MonoBehaviourSingleton<FirebaseService>
         });
     }
 
-    public void SaveGame(string sessionCode, string serialisedGame)
+    public void SaveGame(string gameID, string serialisedGame)
     {
-        DatabaseReference gameRef = _database.GetReference("Games/" + sessionCode);
+        DatabaseReference gameRef = _database.GetReference("Games/" + UserID + "/" + gameID);
         gameRef.SetValueAsync(serialisedGame).ContinueWith(task =>
         {
             if (task.IsFaulted)
@@ -127,9 +122,9 @@ public class FirebaseService : MonoBehaviourSingleton<FirebaseService>
         });
     }
     
-    public async Task<string> LoadGame(string sessionCode)
+    public async Task<string> LoadGame(string gameID)
     {
-        DatabaseReference gameRef = _database.GetReference("Games/" + sessionCode);
+        DatabaseReference gameRef = _database.GetReference("Games/" + UserID + "/" + gameID);
         DataSnapshot snapshot = await gameRef.GetValueAsync();
         try
         {
