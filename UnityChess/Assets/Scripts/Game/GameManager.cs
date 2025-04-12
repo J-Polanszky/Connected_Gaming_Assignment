@@ -475,6 +475,11 @@ public class GameManager : NetworkBehaviour
         };
 
         StartCoroutine(InitialiseAvatar());
+        
+        if (!IsHost) // Client needs to load the host's avatar
+        {
+            Task loadTask = LoadRemoteAvatar(whiteAvatar.Value.ToString(), true);
+        }
 
         if (IsHost)
         {
@@ -526,6 +531,7 @@ public class GameManager : NetworkBehaviour
     [ServerRpc(RequireOwnership = true)]
     public void StartGameServerRpc(ulong clientId, bool newGame = false, string existingSerialisedGame = "")
     {
+        // Shouldnt happen, but better safe than sorry
         if (!IsHost)
             return;
 
@@ -969,11 +975,12 @@ public class GameManager : NetworkBehaviour
         string stringNewValue = newValue.ToString();
         if (string.IsNullOrEmpty(stringNewValue))
             return;
-    
+        
+        // This is being implemented in the clients start, since the event will never actually happen. Will keep it in cast changing avatars mid game is added
+        // as a passion project
         if (!IsHost) // Client needs to load the host's avatar
         {
             Task loadTask = LoadRemoteAvatar(stringNewValue, true);
-            loadTask.Wait();
         }
     }
 
@@ -985,7 +992,7 @@ public class GameManager : NetworkBehaviour
     
         if (IsHost) // Host needs to load the client's avatar
         {
-            LoadRemoteAvatar(stringNewValue, false);
+            Task loadTask = LoadRemoteAvatar(stringNewValue, false);
         }
     }
 
