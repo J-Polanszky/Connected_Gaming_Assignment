@@ -257,16 +257,22 @@ public class AvatarShopManager : MonoBehaviour
             }
         }
 
-        // Position the item in the grid
+        // Position the item in the top-left corner
         RectTransform rectTransform = previewObject.GetComponent<RectTransform>();
+        rectTransform.anchorMin = new Vector2(0, 1); // Top-left anchor
+        rectTransform.anchorMax = new Vector2(0, 1); // Top-left anchor
+        rectTransform.pivot = new Vector2(0, 1); // Top-left pivot
+
         float itemHeight = 200f;
         float itemWidth = 200f;
-        int itemsPerRow = 3;
-
+        int itemsPerRow = 5;
+        
+        // Calculate row and column
         int row = index / itemsPerRow;
         int col = index % itemsPerRow;
 
-        rectTransform.anchoredPosition = new Vector2(col * itemWidth, -row * itemHeight);
+        rectTransform.anchoredPosition = new Vector2(col * itemWidth, -(row * itemHeight));
+        
     }
 
     /// <summary>
