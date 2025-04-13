@@ -22,9 +22,4 @@ public class DLC_PurchaseEvent : Unity.Services.Analytics.Event
     {
         set => SetParameter("Price", value);
     }
-    
-    public string TimeStamp
-    {
-        set => SetParameter("TimeStamp", value);
-    }
 }

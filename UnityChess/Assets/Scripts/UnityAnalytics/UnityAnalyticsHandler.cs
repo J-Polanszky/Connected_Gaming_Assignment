@@ -43,7 +43,9 @@ public class UnityAnalyticsHandler : MonoBehaviourSingleton<UnityAnalyticsHandle
             GameCode = gameCode
         };
         
-        print(pieceCapturedEvent.ToString());
+        Debug.Log(pieceCapturedEvent.ToString());
+        // Not sending to analytics as it seems excessive for the task at hand,
+        // and would burn through the free quota quickly.
         // AnalyticsService.Instance.RecordEvent(pieceCapturedEvent);
     }
     
@@ -59,7 +61,7 @@ public class UnityAnalyticsHandler : MonoBehaviourSingleton<UnityAnalyticsHandle
             GameCode = gameCode
         };
         
-        // AnalyticsService.Instance.RecordEvent(victoryEvent);
+        AnalyticsService.Instance.RecordEvent(victoryEvent);
     }
 
     public void RecordPurchase(string userID, string itemID, int price)
@@ -69,9 +71,8 @@ public class UnityAnalyticsHandler : MonoBehaviourSingleton<UnityAnalyticsHandle
             UserID = userID,
             DLCID = itemID,
             Price = price,
-            TimeStamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
         };
         
-        // AnalyticsService.Instance.RecordEvent(purchaseEvent);
+        AnalyticsService.Instance.RecordEvent(purchaseEvent);
     }
 }

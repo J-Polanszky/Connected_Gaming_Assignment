@@ -25,7 +25,7 @@ public class PieceCapturedEvent : Unity.Services.Analytics.Event
     
     public string FromSquare
     {
-        set => SetParameter("GameCode", value);
+        set => SetParameter("FromSquare", value);
     }
     
     public string GameCode

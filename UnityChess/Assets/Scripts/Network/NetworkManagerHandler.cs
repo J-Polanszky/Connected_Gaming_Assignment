@@ -327,8 +327,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         GameObject pingCanvas = GameObject.FindWithTag("PingUI");
         GameObject debugConsole = GameObject.FindWithTag("DebugConsole");
         loginPanel = GameObject.FindWithTag("LoginPanel");
-
-        DontDestroyOnLoad(pingCanvas);
+        
         DontDestroyOnLoad(debugConsole);
 
         pingText = pingCanvas.transform.GetChild(0).GetComponent<TextMeshProUGUI>();
