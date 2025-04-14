@@ -22,10 +22,9 @@ public class GameManager : NetworkBehaviour
     public static GameManager Instance { get; private set; }
 
     private NetworkVariable<bool> isGameActive = new();
-    private NetworkVariable<bool> isMigratedHost = new();
     private NetworkVariable<int> currentPlayerTurn = new(); // 0 = White, 1 = Black
-    private NetworkVariable<ulong> whitePlayerId = new(); // ID of the client playing white
-    private NetworkVariable<ulong> blackPlayerId = new(); // ID of the client playing black
+    private NetworkVariable<ulong> whitePlayerId = new(ulong.MaxValue); // ID of the client playing white
+    private NetworkVariable<ulong> blackPlayerId = new(ulong.MaxValue); // ID of the client playing black
     private NetworkVariable<FixedString128Bytes> whiteAvatar = new();
     private NetworkVariable<FixedString128Bytes> blackAvatar = new();
 
@@ -47,14 +46,6 @@ public class GameManager : NetworkBehaviour
     // Helper properties to check which side the local player is playing
     public bool IsPlayingWhite => NetworkManager.Singleton.LocalClientId == whitePlayerId.Value;
     public bool IsPlayingBlack => NetworkManager.Singleton.LocalClientId == blackPlayerId.Value;
-
-    public ulong WhitePlayerId => whitePlayerId.Value;
-    public ulong BlackPlayerId => blackPlayerId.Value;
-
-    public bool IsMigratedHost()
-    {
-        return isMigratedHost.Value;
-    }
 
     private void Awake()
     {
@@ -245,6 +236,19 @@ public class GameManager : NetworkBehaviour
     {
         string sessionCode = inputField.text;
         NetworkManagerHandler.Instance.SaveGame(sessionCode, serialisedGame);
+    }
+    
+    [ServerRpc]
+    public void SyncNetworkVariablesServerRpc()
+    {
+        // Force network variables to sync by "touching" them
+        isGameActive.Value = isGameActive.Value;
+        currentPlayerTurn.Value = currentPlayerTurn.Value;
+        whitePlayerId.Value = whitePlayerId.Value;
+        blackPlayerId.Value = blackPlayerId.Value;
+    
+        Debug.Log($"Syncing network variables - CurrentTurn: {(currentPlayerTurn.Value == 0 ? "White" : "Black")}, " +
+                  $"WhiteID: {whitePlayerId.Value}, BlackID: {blackPlayerId.Value}");
     }
 
     [ServerRpc(RequireOwnership = false)]
@@ -441,7 +445,7 @@ public class GameManager : NetworkBehaviour
             [GameSerializationType.PGN] = new PGNSerializer()
         };
 
-        StartCoroutine(InitialiseAvatar());
+        SetClientIDServerRpc(NetworkManager.Singleton.LocalClientId);
 
         if (IsHost)
         {
@@ -471,7 +475,8 @@ public class GameManager : NetworkBehaviour
         }
         else
         {
-            Task loadTask = LoadRemoteAvatar(whiteAvatar.Value.ToString(), true);
+            bool isHostWhite = whitePlayerId.Value != ulong.MaxValue || whitePlayerId.Value != NetworkManager.Singleton.LocalClientId;
+            Task loadTask = LoadRemoteAvatar(whiteAvatar.Value.ToString(), isHostWhite);
 
             IEnumerator DelayedStart()
             {
@@ -484,11 +489,27 @@ public class GameManager : NetworkBehaviour
 
             StartCoroutine(DelayedStart());
         }
+        
     }
-
+    
+        // Security issue, but dont have the time to set up the proper security
+    [ServerRpc(RequireOwnership = false)]
+    void SetClientIDServerRpc(ulong clientId)
+    {
+        if(whitePlayerId.Value == ulong.MaxValue)
+        {
+            whitePlayerId.Value = clientId;
+        }
+        else
+        {
+            blackPlayerId.Value = clientId;
+        }
+    }
+    
     private void OnPlayerIdsChanged(ulong oldValue, ulong newValue)
     {
         EnableCorrectPieces();
+        StartCoroutine(InitialiseAvatar());
     }
 
     void SetupInitialGameState()
@@ -510,8 +531,6 @@ public class GameManager : NetworkBehaviour
             return;
 
         Debug.Log("Setting up as migrated host (black player)");
-
-        isMigratedHost.Value = true;
 
         // Set the host as black player
         blackPlayerId.Value = NetworkManager.Singleton.LocalClientId;
@@ -548,6 +567,7 @@ public class GameManager : NetworkBehaviour
         }
     }
     
+    
     [ServerRpc(RequireOwnership = true)]
     public void StartGameServerRpc(ulong clientId, bool newGame = false, string existingSerialisedGame = "")
     {
@@ -555,19 +575,8 @@ public class GameManager : NetworkBehaviour
         if (!IsHost)
             return;
 
-        // Check if host is playing white or black
-        if (whitePlayerId.Value == NetworkManager.Singleton.LocalClientId)
-        {
-            blackPlayerId.Value = clientId;
-        }
-        else
-        {
-            whitePlayerId.Value = clientId;
-        }
-
         if (newGame)
         {
-            isMigratedHost.Value = false;
             currentPlayerTurn.Value = 0;
             game = new Game();
             NetworkManagerHandler.Instance.RestartGame();
@@ -1013,13 +1022,14 @@ public class GameManager : NetworkBehaviour
     void ReceiveGameStateClientRpc(string serialisedGameState, ClientRpcParams clientRpcParams = default)
     {
         LoadGame(serialisedGameState);
+        EnableCorrectPieces();
     }
 
     public void EndGameForHostMigration()
     {
         BoardManager.Instance.SetActiveAllPieces(false);
     }
-
+    
     IEnumerator InitialiseAvatar()
     {
         if (FirebaseStorageHandler.Instance == null)
