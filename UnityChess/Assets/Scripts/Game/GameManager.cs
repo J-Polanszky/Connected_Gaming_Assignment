@@ -185,6 +185,70 @@ public class GameManager : NetworkBehaviour
         leftButton.onClick.RemoveAllListeners();
         leftButton.onClick.AddListener(Quit);
 
+        isGameActive.OnValueChanged += OnGameActiveChanged;
+        currentPlayerTurn.OnValueChanged += OnPlayerTurnChanged;
+        whitePlayerId.OnValueChanged += OnPlayerIdsChanged;
+        blackPlayerId.OnValueChanged += OnPlayerIdsChanged;
+        whiteAvatar.OnValueChanged += OnWhiteAvatarChanged;
+        blackAvatar.OnValueChanged += OnBlackAvatarChanged;
+
+        // Subscribe to the event triggered when a visual piece is moved.
+        VisualPiece.VisualPieceMoved += OnNetworkedPieceMoved;
+
+        // Initialise the serializers for FEN and PGN formats.
+        serializersByType = new Dictionary<GameSerializationType, IGameSerializer>
+        {
+            [GameSerializationType.FEN] = new FENSerializer(),
+            [GameSerializationType.PGN] = new PGNSerializer()
+        };
+
+        SetClientIDServerRpc(NetworkManager.Singleton.LocalClientId);
+
+        if (IsHost)
+        {
+            SetupInitialGameState();
+
+            IEnumerator DelayedStart()
+            {
+                yield return new WaitForFixedUpdate();
+
+                rightButtonText.text = "Load Game";
+                rightButton.onClick.RemoveAllListeners();
+                rightButton.onClick.AddListener(() =>
+                {
+                    NetworkManagerHandler.Instance.LoadGame(inputField.text).ContinueWith(
+                        task =>
+                        {
+                            MainThreadDispatcher.Instance.Enqueue(() =>
+                            {
+                                LoadGame(task.Result);
+                                BoardManager.Instance.SetActiveAllPieces(false);
+                            });
+                        });
+                });
+            }
+
+            StartCoroutine(DelayedStart());
+        }
+        else
+        {
+            bool isHostWhite = whitePlayerId.Value != ulong.MaxValue ||
+                               whitePlayerId.Value != NetworkManager.Singleton.LocalClientId;
+            Task loadTask = LoadRemoteAvatar(whiteAvatar.Value.ToString(), isHostWhite);
+
+            IEnumerator DelayedStart()
+            {
+                yield return new WaitForFixedUpdate();
+
+                rightButtonText.text = "Save Game";
+                rightButton.onClick.RemoveAllListeners();
+                rightButton.onClick.AddListener(SaveGame);
+            }
+
+            StartCoroutine(DelayedStart());
+        }
+
+
 #if DEBUG_VIEW
         // Enable debug view if compiled with DEBUG_VIEW flag.
         unityChessDebug.gameObject.SetActive(true);
@@ -201,6 +265,11 @@ public class GameManager : NetworkBehaviour
         return serializersByType.TryGetValue(selectedSerializationType, out IGameSerializer serializer)
             ? serializer?.Serialize(game)
             : null;
+    }
+
+    public bool IsBlackPlayer()
+    {
+        return blackPlayerId.Value == NetworkManager.Singleton.LocalClientId;
     }
 
     /// <summary>
@@ -236,19 +305,6 @@ public class GameManager : NetworkBehaviour
     {
         string sessionCode = inputField.text;
         NetworkManagerHandler.Instance.SaveGame(sessionCode, serialisedGame);
-    }
-    
-    [ServerRpc]
-    public void SyncNetworkVariablesServerRpc()
-    {
-        // Force network variables to sync by "touching" them
-        isGameActive.Value = isGameActive.Value;
-        currentPlayerTurn.Value = currentPlayerTurn.Value;
-        whitePlayerId.Value = whitePlayerId.Value;
-        blackPlayerId.Value = blackPlayerId.Value;
-    
-        Debug.Log($"Syncing network variables - CurrentTurn: {(currentPlayerTurn.Value == 0 ? "White" : "Black")}, " +
-                  $"WhiteID: {whitePlayerId.Value}, BlackID: {blackPlayerId.Value}");
     }
 
     [ServerRpc(RequireOwnership = false)]
@@ -419,6 +475,7 @@ public class GameManager : NetworkBehaviour
     {
         Side currentSide = currentPlayerTurn.Value == 0 ? Side.White : Side.Black;
         ulong currentPlayerClientId = currentPlayerTurn.Value == 0 ? whitePlayerId.Value : blackPlayerId.Value;
+        Debug.Log($"White Player ID: {whitePlayerId.Value}, Black Player ID: {blackPlayerId.Value}, Current Player Client ID: {currentPlayerClientId}");
 
         if (NetworkManager.Singleton.LocalClientId == currentPlayerClientId)
             BoardManager.Instance.EnsureOnlyPiecesOfSideAreEnabled(currentSide);
@@ -426,88 +483,41 @@ public class GameManager : NetworkBehaviour
             BoardManager.Instance.SetActiveAllPieces(false);
     }
 
-    public override void OnNetworkSpawn()
-    {
-        isGameActive.OnValueChanged += OnGameActiveChanged;
-        currentPlayerTurn.OnValueChanged += OnPlayerTurnChanged;
-        whitePlayerId.OnValueChanged += OnPlayerIdsChanged;
-        blackPlayerId.OnValueChanged += OnPlayerIdsChanged;
-        whiteAvatar.OnValueChanged += OnWhiteAvatarChanged;
-        blackAvatar.OnValueChanged += OnBlackAvatarChanged;
-
-        // Subscribe to the event triggered when a visual piece is moved.
-        VisualPiece.VisualPieceMoved += OnNetworkedPieceMoved;
-
-        // Initialise the serializers for FEN and PGN formats.
-        serializersByType = new Dictionary<GameSerializationType, IGameSerializer>
-        {
-            [GameSerializationType.FEN] = new FENSerializer(),
-            [GameSerializationType.PGN] = new PGNSerializer()
-        };
-
-        SetClientIDServerRpc(NetworkManager.Singleton.LocalClientId);
-
-        if (IsHost)
-        {
-            SetupInitialGameState();
-
-            IEnumerator DelayedStart()
-            {
-                yield return new WaitForFixedUpdate();
-
-                rightButtonText.text = "Load Game";
-                rightButton.onClick.RemoveAllListeners();
-                rightButton.onClick.AddListener(() =>
-                {
-                    NetworkManagerHandler.Instance.LoadGame(inputField.text).ContinueWith(
-                        task =>
-                        {
-                            MainThreadDispatcher.Instance.Enqueue(() =>
-                            {
-                                LoadGame(task.Result);
-                                BoardManager.Instance.SetActiveAllPieces(false);
-                            });
-                        });
-                });
-            }
-
-            StartCoroutine(DelayedStart());
-        }
-        else
-        {
-            bool isHostWhite = whitePlayerId.Value != ulong.MaxValue || whitePlayerId.Value != NetworkManager.Singleton.LocalClientId;
-            Task loadTask = LoadRemoteAvatar(whiteAvatar.Value.ToString(), isHostWhite);
-
-            IEnumerator DelayedStart()
-            {
-                yield return new WaitForFixedUpdate();
-
-                rightButtonText.text = "Save Game";
-                rightButton.onClick.RemoveAllListeners();
-                rightButton.onClick.AddListener(SaveGame);
-            }
-
-            StartCoroutine(DelayedStart());
-        }
-        
-    }
-    
-        // Security issue, but dont have the time to set up the proper security
+    // Security issue, but dont have the time to set up the proper security
     [ServerRpc(RequireOwnership = false)]
     void SetClientIDServerRpc(ulong clientId)
     {
-        if(whitePlayerId.Value == ulong.MaxValue)
+        // Prevent a migrated host (playing as black) from overwriting the white player ID
+        if (IsHost && IsPlayingBlack && whitePlayerId.Value != ulong.MaxValue)
+        {
+            Debug.Log($"Migrated host preventing white player ID overwrite. Keeping ID: {whitePlayerId.Value}");
+            return; // Migrated host shouldn't change white player ID if it's already set
+        }
+        
+        if (whitePlayerId.Value == ulong.MaxValue)
         {
             whitePlayerId.Value = clientId;
+            Debug.Log($"White player ID set to: {clientId}");
         }
         else
         {
             blackPlayerId.Value = clientId;
+            Debug.Log($"Black player ID set to: {clientId}");
         }
     }
-    
+
     private void OnPlayerIdsChanged(ulong oldValue, ulong newValue)
     {
+        // FIXME: Dirty fix due to unity netcode's handling of defaults, and not having enough time to set up a proper fix
+        if (newValue == ulong.MaxValue)
+        {
+            if (!IsHost)
+            {
+                SetClientIDServerRpc(NetworkManager.Singleton.LocalClientId);
+            }
+            return;
+        }
+
         EnableCorrectPieces();
         StartCoroutine(InitialiseAvatar());
     }
@@ -524,7 +534,7 @@ public class GameManager : NetworkBehaviour
     }
 
     [ServerRpc(RequireOwnership = true)]
-    public void SetupAsMigratedHostServerRpc(string gameState)
+    public void SetupAsMigratedHostServerRpc(string gameState, bool isBlackPlayer)
     {
         // Only the host should execute this
         if (!IsHost)
@@ -532,13 +542,16 @@ public class GameManager : NetworkBehaviour
 
         Debug.Log("Setting up as migrated host (black player)");
 
-        // Set the host as black player
-        blackPlayerId.Value = NetworkManager.Singleton.LocalClientId;
-        whitePlayerId.Value = ulong.MaxValue; // To be assigned when a client connects
+        if (isBlackPlayer)
+        {
+            // Set the host as black player
+            blackPlayerId.Value = NetworkManager.Singleton.LocalClientId;
+            whitePlayerId.Value = ulong.MaxValue; // To be assigned when a client connects
+        }
 
         // Load the migrated game state
         LoadGame(gameState);
-        
+
 
         // Set up the black player avatar (host)
         if (FirebaseStorageHandler.Instance != null)
@@ -548,7 +561,7 @@ public class GameManager : NetworkBehaviour
 
         // Cache the serialized game for future comparisons
         serialisedGame = gameState;
-        
+
         Debug.Log(
             $"Migrated host setup complete - waiting for client. Current turn: {(currentPlayerTurn.Value == 0 ? "White" : "Black")}");
     }
@@ -566,8 +579,8 @@ public class GameManager : NetworkBehaviour
             blackAvatar.Value = avatarId;
         }
     }
-    
-    
+
+
     [ServerRpc(RequireOwnership = true)]
     public void StartGameServerRpc(ulong clientId, bool newGame = false, string existingSerialisedGame = "")
     {
@@ -601,8 +614,6 @@ public class GameManager : NetworkBehaviour
         rightButtonText.text = "Save Game";
         rightButton.onClick.RemoveAllListeners();
         rightButton.onClick.AddListener(SaveGame);
-        
-        EnableCorrectPieces();
     }
 
     [ClientRpc]
@@ -619,6 +630,8 @@ public class GameManager : NetworkBehaviour
         rightButtonText.text = "Save Game";
         rightButton.onClick.RemoveAllListeners();
         rightButton.onClick.AddListener(SaveGame);
+
+        EnableCorrectPieces();
     }
 
     /// <summary>
@@ -854,7 +867,6 @@ public class GameManager : NetworkBehaviour
     void ResetGameStateClientRpc(string serialisedGameState, ClientRpcParams clientRpcParams = default)
     {
         LoadGame(serialisedGameState);
-        EnableCorrectPieces();
     }
 
     [ClientRpc]
@@ -1022,14 +1034,14 @@ public class GameManager : NetworkBehaviour
     void ReceiveGameStateClientRpc(string serialisedGameState, ClientRpcParams clientRpcParams = default)
     {
         LoadGame(serialisedGameState);
-        EnableCorrectPieces();
+        Debug.Log($"Client ID {NetworkManager.Singleton.LocalClientId} received game state");
     }
 
     public void EndGameForHostMigration()
     {
         BoardManager.Instance.SetActiveAllPieces(false);
     }
-    
+
     IEnumerator InitialiseAvatar()
     {
         if (FirebaseStorageHandler.Instance == null)

@@ -110,6 +110,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
 
             // Save the game state
             string migratedGameState = SaveGameState();
+            bool isBlackPlayer = GameManager.Instance.IsBlackPlayer();
 
             started = false;
             isGameActive = false;
@@ -122,12 +123,12 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
             // Load the MigrateHost scene instead of the Lobby
             SceneManager.LoadSceneAsync("Migrating").completed += operation =>
             {
-                HandleMigrationComplete(migratedGameState);
+                HandleMigrationComplete(migratedGameState, isBlackPlayer);
             };
         }
     }
 
-    void HandleMigrationComplete(string migratedGameState)
+    void HandleMigrationComplete(string migratedGameState, bool isBlackPlayer)
     {
         NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
         NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnect;
@@ -135,10 +136,10 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         isHosting = true;
         isGameActive = true;
 
-        StartGameAsMigratedHost(migratedGameState);
+        StartGameAsMigratedHost(migratedGameState, isBlackPlayer);
     }
 
-    void StartGameAsMigratedHost(string migratedGameState)
+    void StartGameAsMigratedHost(string migratedGameState, bool isBlackPlayer)
     {
         if (started)
             return;
@@ -159,12 +160,12 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
             mainThreadDispatcher.Enqueue(() =>
             {
                 // Use specialized OnMigrationHost method
-                OnMigrationHost(joinCode, migratedGameState);
+                OnMigrationHost(joinCode, migratedGameState, isBlackPlayer);
             });
         });
     }
 
-    void OnMigrationHost(string joinCode, string gameState)
+    void OnMigrationHost(string joinCode, string gameState, bool isBlackPlayer)
     {
         Debug.Log("Setting up migrated host");
         started = true;
@@ -184,7 +185,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
                         {
                             // Wait for start functions for GameManager to be complete (~1 second scrappy fix)
                             yield return new WaitForSeconds(1);
-                            GameManager.Instance.SetupAsMigratedHostServerRpc(gameState);
+                            GameManager.Instance.SetupAsMigratedHostServerRpc(gameState, isBlackPlayer);
                         }
 
                         StartCoroutine(WaitForStart());
