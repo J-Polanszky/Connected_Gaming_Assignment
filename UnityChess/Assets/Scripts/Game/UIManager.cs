@@ -298,4 +298,12 @@ public class UIManager : MonoBehaviourSingleton<UIManager> {
 			resultText.gameObject.SetActive(true);
 		}
 	}
+
+	void OnDestroy(){
+		GameManager.NewGameStartedEvent -= OnNewGameStarted;
+		GameManager.GameEndedEvent -= OnGameEnded;
+		GameManager.MoveExecutedEvent -= OnMoveExecuted;
+		GameManager.GameResetToHalfMoveEvent -= OnGameResetToHalfMove;
+		
+	}
 }

@@ -16,14 +16,16 @@ using UnityEngine.UI;
 /// <summary>
 /// Manages the overall game state, including game start, moves execution,
 /// special moves handling (such as castling, en passant, and promotion), and game reset.
-/// Inherits from a singleton base class to ensure a single instance throughout the application.
 /// </summary>
 public class GameManager : NetworkBehaviour
 {
     public static GameManager Instance { get; private set; }
 
     private NetworkVariable<bool> isGameActive = new();
+    private NetworkVariable<bool> isMigratedHost = new();
     private NetworkVariable<int> currentPlayerTurn = new(); // 0 = White, 1 = Black
+    private NetworkVariable<ulong> whitePlayerId = new(); // ID of the client playing white
+    private NetworkVariable<ulong> blackPlayerId = new(); // ID of the client playing black
     private NetworkVariable<FixedString128Bytes> whiteAvatar = new();
     private NetworkVariable<FixedString128Bytes> blackAvatar = new();
 
@@ -33,7 +35,7 @@ public class GameManager : NetworkBehaviour
 
     private Button leftButton, rightButton;
     private Text leftButtonText, rightButtonText;
-    private InputField inputField;
+    private TMP_InputField inputField;
     private Image white_avatar, black_avatar;
 
     // Events signalling various game state changes.
@@ -42,6 +44,17 @@ public class GameManager : NetworkBehaviour
     public static event Action GameResetToHalfMoveEvent;
     public static event Action MoveExecutedEvent;
 
+    // Helper properties to check which side the local player is playing
+    public bool IsPlayingWhite => NetworkManager.Singleton.LocalClientId == whitePlayerId.Value;
+    public bool IsPlayingBlack => NetworkManager.Singleton.LocalClientId == blackPlayerId.Value;
+
+    public ulong WhitePlayerId => whitePlayerId.Value;
+    public ulong BlackPlayerId => blackPlayerId.Value;
+
+    public bool IsMigratedHost()
+    {
+        return isMigratedHost.Value;
+    }
 
     private void Awake()
     {
@@ -165,7 +178,7 @@ public class GameManager : NetworkBehaviour
     {
         gameInfo = GameObject.FindWithTag("GameInfo").transform;
         gameCode = GameObject.FindWithTag("Gamecode").GetComponent<TextMeshProUGUI>();
-        
+
         white_avatar = gameInfo.parent.Find("Avatar_White").GetComponent<Image>();
         black_avatar = gameInfo.parent.Find("Avatar_Black").GetComponent<Image>();
 
@@ -175,28 +188,16 @@ public class GameManager : NetworkBehaviour
         rightButton = rightButtonObj.GetComponent<Button>();
         leftButtonText = leftButton.transform.GetChild(0).GetComponent<Text>();
         rightButtonText = rightButton.transform.GetChild(0).GetComponent<Text>();
-        inputField = GameObject.FindWithTag("InputField").GetComponent<InputField>();
+        inputField = GameObject.FindWithTag("InputField").GetComponent<TMP_InputField>();
 
         leftButtonText.text = "Quit";
         leftButton.onClick.RemoveAllListeners();
         leftButton.onClick.AddListener(Quit);
 
-        // // Subscribe to the event triggered when a visual piece is moved.
-        // VisualPiece.VisualPieceMoved += OnPieceMoved;
-        //
-        // // Initialise the serializers for FEN and PGN formats.
-        // serializersByType = new Dictionary<GameSerializationType, IGameSerializer> {
-        // 	[GameSerializationType.FEN] = new FENSerializer(),
-        // 	[GameSerializationType.PGN] = new PGNSerializer()
-        // };
-        //
-        // // Begin a new game.
-        // StartNewGame();
-
 #if DEBUG_VIEW
-		// Enable debug view if compiled with DEBUG_VIEW flag.
-		unityChessDebug.gameObject.SetActive(true);
-		unityChessDebug.enabled = true;
+        // Enable debug view if compiled with DEBUG_VIEW flag.
+        unityChessDebug.gameObject.SetActive(true);
+        unityChessDebug.enabled = true;
 #endif
     }
 
@@ -219,19 +220,7 @@ public class GameManager : NetworkBehaviour
     {
         game = serializersByType[selectedSerializationType].Deserialize(serializedGame);
         NewGameStartedEvent?.Invoke();
-        if (leftButtonText.text != "Resign")
-        {
-            leftButtonText.text = "Resign";
-            leftButton.onClick.RemoveAllListeners();
-            leftButton.onClick.AddListener(Resign);
-        }
-
-        if (rightButtonText.text != "Save Game")
-        {
-            rightButtonText.text = "Save Game";
-            rightButton.onClick.RemoveAllListeners();
-            rightButton.onClick.AddListener(SaveGame);
-        }
+        serialisedGame = serializedGame;
     }
 
     void Quit()
@@ -243,33 +232,7 @@ public class GameManager : NetworkBehaviour
         if (eventInfo != null)
             eventInfo.SetValue(NetworkManager.Singleton.SceneManager, null);
 
-        // Cant do this as he is client.
-        // void OnLoadCompleted(ulong id, string sceneName, UnityEngine.SceneManagement.LoadSceneMode mode)
-        // {
-        //     if (sceneName == "Lobby")
-        //     {
-        //         Task resetTask = NetworkManagerHandler.Instance.ResetState();
-        //         resetTask.Wait();  //To make sure this cant cause a deadlock
-        //     }
-        //
-        //     NetworkManager.Singleton.SceneManager.OnLoadComplete -= OnLoadCompleted;
-        // }
-        //
-        // NetworkManager.Singleton.SceneManager.OnLoadComplete += OnLoadCompleted;
-
-        // NetworkManager.Singleton.SceneManager.LoadScene("Lobby",
-        //     UnityEngine.SceneManagement.LoadSceneMode.Single);
-
-        SceneManager.LoadSceneAsync("Lobby").completed += operation =>
-        {
-            NetworkManagerHandler.Instance.ResetState();
-        };
-
-// #if UNITY_EDITOR
-//         UnityEditor.EditorApplication.isPlaying = false;
-// #else
-//         Application.Quit();
-// #endif
+        SceneManager.LoadSceneAsync("Lobby").completed += operation => { NetworkManagerHandler.Instance.ResetState(); };
     }
 
     void Resign()
@@ -290,7 +253,7 @@ public class GameManager : NetworkBehaviour
         if (!IsHost)
             return;
 
-        bool didWhiteWin = clientId > 0;
+        bool didWhiteWin = clientId == blackPlayerId.Value;
 
         UnityAnalyticsHandler.Instance.RecordVictory(didWhiteWin,
             VictoryType.Resignation, gameCodeStr);
@@ -435,10 +398,7 @@ public class GameManager : NetworkBehaviour
 
         if (newValue)
         {
-            BoardManager.Instance.EnsureOnlyPiecesOfSideAreEnabled(IsHost ? Side.White : Side.Black);
-
-            // Has a bug where it will remove move history. It was decided to keep this since it is not a critical bug, and since it is not sent to the client, it keeps it
-            // even and synced.
+            EnableCorrectPieces();
             NewGameStartedEvent?.Invoke();
         }
         else
@@ -447,20 +407,27 @@ public class GameManager : NetworkBehaviour
 
     private void OnPlayerTurnChanged(int oldValue, int newValue)
     {
-        Side sideToMove = newValue == 0 ? Side.White : Side.Black;
+        EnableCorrectPieces();
+        GameResetToHalfMoveEvent?.Invoke();
+    }
 
-        if ((IsHost && sideToMove == Side.White) || (!IsHost && sideToMove == Side.Black))
-            BoardManager.Instance.EnsureOnlyPiecesOfSideAreEnabled(sideToMove);
+    private void EnableCorrectPieces()
+    {
+        Side currentSide = currentPlayerTurn.Value == 0 ? Side.White : Side.Black;
+        ulong currentPlayerClientId = currentPlayerTurn.Value == 0 ? whitePlayerId.Value : blackPlayerId.Value;
+
+        if (NetworkManager.Singleton.LocalClientId == currentPlayerClientId)
+            BoardManager.Instance.EnsureOnlyPiecesOfSideAreEnabled(currentSide);
         else
             BoardManager.Instance.SetActiveAllPieces(false);
-
-        GameResetToHalfMoveEvent?.Invoke();
     }
 
     public override void OnNetworkSpawn()
     {
         isGameActive.OnValueChanged += OnGameActiveChanged;
         currentPlayerTurn.OnValueChanged += OnPlayerTurnChanged;
+        whitePlayerId.OnValueChanged += OnPlayerIdsChanged;
+        blackPlayerId.OnValueChanged += OnPlayerIdsChanged;
         whiteAvatar.OnValueChanged += OnWhiteAvatarChanged;
         blackAvatar.OnValueChanged += OnBlackAvatarChanged;
 
@@ -475,11 +442,6 @@ public class GameManager : NetworkBehaviour
         };
 
         StartCoroutine(InitialiseAvatar());
-        
-        if (!IsHost) // Client needs to load the host's avatar
-        {
-            Task loadTask = LoadRemoteAvatar(whiteAvatar.Value.ToString(), true);
-        }
 
         if (IsHost)
         {
@@ -507,27 +469,85 @@ public class GameManager : NetworkBehaviour
 
             StartCoroutine(DelayedStart());
         }
-
         else
         {
+            Task loadTask = LoadRemoteAvatar(whiteAvatar.Value.ToString(), true);
+
             IEnumerator DelayedStart()
             {
                 yield return new WaitForFixedUpdate();
 
-                rightButtonText.text = "";
+                rightButtonText.text = "Save Game";
+                rightButton.onClick.RemoveAllListeners();
+                rightButton.onClick.AddListener(SaveGame);
             }
 
             StartCoroutine(DelayedStart());
         }
     }
 
+    private void OnPlayerIdsChanged(ulong oldValue, ulong newValue)
+    {
+        EnableCorrectPieces();
+    }
+
     void SetupInitialGameState()
     {
         isGameActive.Value = false;
         currentPlayerTurn.Value = 0;
+
+        // By default, host is white and the first client is black
+        whitePlayerId.Value = NetworkManager.Singleton.LocalClientId;
+
         game = new Game();
     }
 
+    [ServerRpc(RequireOwnership = true)]
+    public void SetupAsMigratedHostServerRpc(string gameState)
+    {
+        // Only the host should execute this
+        if (!IsHost)
+            return;
+
+        Debug.Log("Setting up as migrated host (black player)");
+
+        isMigratedHost.Value = true;
+
+        // Set the host as black player
+        blackPlayerId.Value = NetworkManager.Singleton.LocalClientId;
+        whitePlayerId.Value = ulong.MaxValue; // To be assigned when a client connects
+
+        // Load the migrated game state
+        LoadGame(gameState);
+        
+
+        // Set up the black player avatar (host)
+        if (FirebaseStorageHandler.Instance != null)
+        {
+            StartCoroutine(SetupMigratedHostAvatar());
+        }
+
+        // Cache the serialized game for future comparisons
+        serialisedGame = gameState;
+        
+        Debug.Log(
+            $"Migrated host setup complete - waiting for client. Current turn: {(currentPlayerTurn.Value == 0 ? "White" : "Black")}");
+    }
+
+    IEnumerator SetupMigratedHostAvatar()
+    {
+        Task<Texture2D> avatarTask = FirebaseStorageHandler.Instance.GetCurrentAvatarTexture();
+        yield return new WaitUntil(() => avatarTask.IsCompleted);
+
+        if (avatarTask.Exception == null)
+        {
+            // Set the host's avatar as black player
+            string avatarId = FirebaseStorageHandler.Instance.EquippedAvatarId;
+            SetAvatar(avatarTask.Result, false, avatarId);
+            blackAvatar.Value = avatarId;
+        }
+    }
+    
     [ServerRpc(RequireOwnership = true)]
     public void StartGameServerRpc(ulong clientId, bool newGame = false, string existingSerialisedGame = "")
     {
@@ -535,8 +555,19 @@ public class GameManager : NetworkBehaviour
         if (!IsHost)
             return;
 
+        // Check if host is playing white or black
+        if (whitePlayerId.Value == NetworkManager.Singleton.LocalClientId)
+        {
+            blackPlayerId.Value = clientId;
+        }
+        else
+        {
+            whitePlayerId.Value = clientId;
+        }
+
         if (newGame)
         {
+            isMigratedHost.Value = false;
             currentPlayerTurn.Value = 0;
             game = new Game();
             NetworkManagerHandler.Instance.RestartGame();
@@ -561,16 +592,24 @@ public class GameManager : NetworkBehaviour
         rightButtonText.text = "Save Game";
         rightButton.onClick.RemoveAllListeners();
         rightButton.onClick.AddListener(SaveGame);
+        
+        EnableCorrectPieces();
     }
 
     [ClientRpc]
     void StartGameClientRpc(string serialisedGameState, ClientRpcParams clientRpcParams = default)
     {
         Instance.LoadGame(serialisedGameState);
-        serialisedGame = serialisedGameState;
-        
-        // Identify which avatar needs to be loaded
-        // bool isOpponentWhite = !IsHost;
+
+        // Set up client buttons when the game starts
+        leftButtonText.text = "Resign";
+        leftButton.onClick.RemoveAllListeners();
+        leftButton.onClick.AddListener(Resign);
+
+        // Add save game functionality for clients
+        rightButtonText.text = "Save Game";
+        rightButton.onClick.RemoveAllListeners();
+        rightButton.onClick.AddListener(SaveGame);
     }
 
     /// <summary>
@@ -607,7 +646,6 @@ public class GameManager : NetworkBehaviour
         Transform closestBoardSquareTransform, Piece promotionPiece = null)
     {
         // Don't process moves if game isn't active
-        // Should not be possible
         if (!isGameActive.Value)
         {
             // Return piece to its original position
@@ -622,10 +660,20 @@ public class GameManager : NetworkBehaviour
             return;
         }
 
-        bool canMove = (currentPlayerTurn.Value == 0 && IsHost) || (currentPlayerTurn.Value == 1 && !IsHost);
+        // Debug player roles
+        Debug.Log(
+            $"Local Client ID: {NetworkManager.Singleton.LocalClientId}, White Player ID: {whitePlayerId.Value}, Black Player ID: {blackPlayerId.Value}");
+        Debug.Log(
+            $"Is Playing White: {IsPlayingWhite}, Is Playing Black: {IsPlayingBlack}, Current Turn: {currentPlayerTurn.Value}");
 
-        if (!canMove)
+        // Check if it's this player's turn
+        Side currentSide = currentPlayerTurn.Value == 0 ? Side.White : Side.Black;
+        bool isLocalPlayersTurn = (currentPlayerTurn.Value == 0 && IsPlayingWhite) ||
+                                  (currentPlayerTurn.Value == 1 && IsPlayingBlack);
+
+        if (!isLocalPlayersTurn)
         {
+            Debug.Log("Not your turn!");
             movedPieceTransform.position = movedPieceTransform.parent.position;
             return;
         }
@@ -638,14 +686,13 @@ public class GameManager : NetworkBehaviour
             // If no legal move is found, reset the piece's position.
             movedPieceTransform.position = movedPieceTransform.parent.position;
 #if DEBUG_VIEW
-			// In debug view, log the legal moves for further analysis.
-			Piece movedPiece = CurrentBoard[startSquare];
-			game.TryGetLegalMovesForPiece(movedPiece, out ICollection<Movement> legalMoves);
-			UnityChessDebug.ShowLegalMovesInLog(legalMoves);
+            // In debug view, log the legal moves for further analysis.
+            Piece movedPiece = CurrentBoard[startSquare];
+            game.TryGetLegalMovesForPiece(movedPiece, out ICollection<Movement> legalMoves);
+            UnityChessDebug.ShowLegalMovesInLog(legalMoves);
 #endif
             return;
         }
-        
 
         if (move is not SpecialMove specialMove || await TryHandleSpecialMoveBehaviourAsync(specialMove))
         {
@@ -656,7 +703,7 @@ public class GameManager : NetworkBehaviour
                     promotionPiece = promotionMove.PromotionPiece;
                 }
             }
-            
+
             ValidateMoveServerRpc(new SerializedSquare(startSquare.File, startSquare.Rank),
                 new SerializedSquare(endSquare.File, endSquare.Rank), GetSerializedGame(),
                 (byte)CurrentBoard[startSquare.File, startSquare.Rank].GetPieceType(),
@@ -684,11 +731,19 @@ public class GameManager : NetworkBehaviour
 
         ulong clientId = rpcParams.Receive.SenderClientId;
 
-        bool validPlayer = (currentPlayerTurn.Value == 0 && clientId == 0) ||
-                           (currentPlayerTurn.Value == 1 && clientId != 0);
+        // Debug player IDs
+        Debug.Log(
+            $"Move attempt - Client ID: {clientId}, White Player ID: {whitePlayerId.Value}, Black Player ID: {blackPlayerId.Value}, Current Turn: {currentPlayerTurn.Value}");
+
+        // Check if it's the correct player's turn
+        bool validPlayer = (currentPlayerTurn.Value == 0 && clientId == whitePlayerId.Value) ||
+                           (currentPlayerTurn.Value == 1 && clientId == blackPlayerId.Value);
 
         if (!validPlayer)
+        {
+            Debug.Log($"Invalid player trying to move: {clientId}");
             return;
+        }
 
         Square start = new Square(startSquare.File, startSquare.Rank);
         Square end = new Square(endSquare.File, endSquare.Rank);
@@ -713,7 +768,7 @@ public class GameManager : NetworkBehaviour
         if (move is PromotionMove promotionMove && promotionPieceType > 0)
         {
             PieceType pieceType = (PieceType)promotionPieceType;
-            Side side = (currentPlayerTurn.Value == 0 && clientId == 0) ? Side.White : Side.Black;
+            Side side = currentPlayerTurn.Value == 0 ? Side.White : Side.Black;
 
             Piece promotionPiece = pieceType switch
             {
@@ -756,7 +811,7 @@ public class GameManager : NetworkBehaviour
         if (capturedPiece != null)
             UnityAnalyticsHandler.Instance.RecordPieceCaptured(capturedPiece, move,
                 GetGameCode());
-        
+
         ExecuteMoveClientRpc(
             new SerialisedMove
             {
@@ -790,16 +845,19 @@ public class GameManager : NetworkBehaviour
     void ResetGameStateClientRpc(string serialisedGameState, ClientRpcParams clientRpcParams = default)
     {
         LoadGame(serialisedGameState);
+        EnableCorrectPieces();
     }
 
     [ClientRpc]
     void ExecuteMoveClientRpc(SerialisedMove move)
     {
-        // Return if the client is the host, since the move would already be executed from the server rpc.
+        // Host gamestate would be up to date due to server rpc
         if (IsHost)
             return;
 
-        Debug.Log("Client ID: " + NetworkManager.Singleton.LocalClientId);
+        // Debug info
+        Debug.Log(
+            $"Executing move on client. Local Client ID: {NetworkManager.Singleton.LocalClientId}, Current Turn Player ID: {(currentPlayerTurn.Value == 0 ? whitePlayerId.Value : blackPlayerId.Value)}");
 
         Square startSquare = new Square(move.StartSquare.File, move.StartSquare.Rank);
         Square endSquare = new Square(move.EndSquare.File, move.EndSquare.Rank);
@@ -811,17 +869,13 @@ public class GameManager : NetworkBehaviour
 
         Transform pieceTransform = pieceGo.transform;
         Transform destTransform = BoardManager.Instance.GetSquareGOByPosition(endSquare).transform;
-        
+
         Movement movement = null;
-        
+
         if (move.IsSpecialMove)
         {
             movement = move.SpecialMoveType switch
             {
-                // Castle takes king square, end square and rook square
-                // En passant takes attacking pawn position, end, and captured pawn position
-                // Promotion takes pawn position and end position
-                // The king square, attacking pawn and the pawn position for these 3 would be start square no?
                 1 => new CastlingMove(startSquare, endSquare,
                     new Square(move.SpecialSquare.File, move.SpecialSquare.Rank)),
                 2 => new EnPassantMove(startSquare, endSquare,
@@ -840,12 +894,12 @@ public class GameManager : NetworkBehaviour
                     (byte)PieceType.Knight => new Knight(SideToMove),
                     _ => null
                 };
-                
+
                 if (promotionPiece == null)
                 {
                     Debug.LogError("Promotion piece is null");
                 }
-                
+
                 promotionMove.SetPromotionPiece(promotionPiece);
                 movement = promotionMove;
             }
@@ -855,17 +909,11 @@ public class GameManager : NetworkBehaviour
             movement = new Movement(startSquare, endSquare);
         }
 
-        // BoardManager.Instance.TryDestroyVisualPiece(endSquare);
-        //
-        // pieceTransform.SetParent(destTransform);
-        // pieceTransform.position = destTransform.position;
-
         game.TryExecuteMove(movement, out Piece _, true);
 
         MoveExecutedEvent?.Invoke();
 
         serialisedGame = SerializeGame();
-        Debug.Log("Game state: " + serialisedGame);
     }
 
     [ClientRpc]
@@ -893,9 +941,10 @@ public class GameManager : NetworkBehaviour
         {
             isGameActive.Value = false;
             NetworkManagerHandler.Instance.GameOver();
-            ulong otherClientID =
-                NetworkManager.Singleton.ConnectedClients.Keys.First(id =>
-                    id != NetworkManager.Singleton.LocalClientId);
+
+            // Find the other player
+            ulong otherClientID = IsPlayingWhite ? blackPlayerId.Value : whitePlayerId.Value;
+
             leftButtonText.text = "New Game";
             leftButton.onClick.RemoveAllListeners();
             leftButton.onClick.AddListener(() => { StartGameServerRpc(otherClientID, true); });
@@ -926,10 +975,13 @@ public class GameManager : NetworkBehaviour
     {
         isGameActive.OnValueChanged -= OnGameActiveChanged;
         currentPlayerTurn.OnValueChanged -= OnPlayerTurnChanged;
-
-        base.OnDestroy();
+        whitePlayerId.OnValueChanged -= OnPlayerIdsChanged;
+        blackPlayerId.OnValueChanged -= OnPlayerIdsChanged;
+        whiteAvatar.OnValueChanged -= OnWhiteAvatarChanged;
+        blackAvatar.OnValueChanged -= OnBlackAvatarChanged;
 
         VisualPiece.VisualPieceMoved -= OnNetworkedPieceMoved;
+        base.OnDestroy();
     }
 
     public string GetSerializedGame()
@@ -967,7 +1019,7 @@ public class GameManager : NetworkBehaviour
     {
         BoardManager.Instance.SetActiveAllPieces(false);
     }
-    
+
     IEnumerator InitialiseAvatar()
     {
         if (FirebaseStorageHandler.Instance == null)
@@ -975,29 +1027,31 @@ public class GameManager : NetworkBehaviour
 
         Task<Texture2D> avatarTask = FirebaseStorageHandler.Instance.GetCurrentAvatarTexture();
         yield return new WaitUntil(() => avatarTask.IsCompleted);
-        
+
         if (avatarTask.IsFaulted)
             throw new Exception("Failed to load avatar texture");
 
         string avatarID = FirebaseStorageHandler.Instance.EquippedAvatarId;
-        SetAvatar(avatarTask.Result, IsHost, avatarID);
+        SetAvatar(avatarTask.Result, IsPlayingWhite, avatarID);
     }
-    
+
     private async Task LoadRemoteAvatar(string avatarId, bool isWhite)
     {
         if (FirebaseStorageHandler.Instance == null)
             return;
-    
+
         try
         {
             Texture2D avatarTexture = await FirebaseStorageHandler.Instance.GetAvatarTexture(avatarId);
-        
+
             // Update the UI without triggering another network update
             if (isWhite)
-                white_avatar.sprite = Sprite.Create(avatarTexture, new Rect(0, 0, avatarTexture.width, avatarTexture.height),
+                white_avatar.sprite = Sprite.Create(avatarTexture,
+                    new Rect(0, 0, avatarTexture.width, avatarTexture.height),
                     new Vector2(0.5f, 0.5f));
             else
-                black_avatar.sprite = Sprite.Create(avatarTexture, new Rect(0, 0, avatarTexture.width, avatarTexture.height),
+                black_avatar.sprite = Sprite.Create(avatarTexture,
+                    new Rect(0, 0, avatarTexture.width, avatarTexture.height),
                     new Vector2(0.5f, 0.5f));
         }
         catch (Exception e)
@@ -1005,16 +1059,14 @@ public class GameManager : NetworkBehaviour
             Debug.LogError($"Error loading remote avatar {avatarId}: {e.Message}");
         }
     }
-    
+
     private void OnWhiteAvatarChanged(FixedString128Bytes oldValue, FixedString128Bytes newValue)
     {
         string stringNewValue = newValue.ToString();
         if (string.IsNullOrEmpty(stringNewValue))
             return;
-        
-        // This is being implemented in the clients start, since the event will never actually happen. Will keep it in cast changing avatars mid game is added
-        // as a passion project
-        if (!IsHost) // Client needs to load the host's avatar
+
+        if (!IsPlayingWhite) // Only load opponent's avatar
         {
             Task loadTask = LoadRemoteAvatar(stringNewValue, true);
         }
@@ -1025,8 +1077,8 @@ public class GameManager : NetworkBehaviour
         string stringNewValue = newValue.ToString();
         if (string.IsNullOrEmpty(stringNewValue))
             return;
-    
-        if (IsHost) // Host needs to load the client's avatar
+
+        if (!IsPlayingBlack) // Only load opponent's avatar
         {
             Task loadTask = LoadRemoteAvatar(stringNewValue, false);
         }
@@ -1040,9 +1092,10 @@ public class GameManager : NetworkBehaviour
             whiteAvatar.Value = avatarURI;
             return;
         }
+
         blackAvatar.Value = avatarURI;
     }
-    
+
     public void SetAvatar(Texture2D avatar, bool isWhite, string avatarURI = null)
     {
         if (isWhite)
@@ -1051,8 +1104,8 @@ public class GameManager : NetworkBehaviour
         else
             black_avatar.sprite = Sprite.Create(avatar, new Rect(0, 0, avatar.width, avatar.height),
                 new Vector2(0.5f, 0.5f));
-        
-        if(avatarURI != null)
+
+        if (avatarURI != null)
             SetAvatarServerRpc(avatarURI, isWhite);
     }
 }

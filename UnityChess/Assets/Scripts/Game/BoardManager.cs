@@ -233,4 +233,10 @@ public class BoardManager : MonoBehaviourSingleton<BoardManager> {
 	/// <returns>The corresponding square GameObject.</returns>
 	public GameObject GetSquareGOByPosition(Square position) =>
 		Array.Find(allSquaresGO, go => go.name == SquareToString(position));
+
+	private void OnDestroy()
+	{
+		GameManager.NewGameStartedEvent -= OnNewGameStarted;
+		GameManager.GameResetToHalfMoveEvent -= OnGameResetToHalfMove;
+	}
 }

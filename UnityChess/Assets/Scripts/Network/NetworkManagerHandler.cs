@@ -1,7 +1,6 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 using TMPro;
 using Unity.Netcode;
@@ -12,6 +11,8 @@ using Unity.Services.Relay;
 using Unity.Services.Relay.Models;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.SceneManagement;
+using IEnumerator = System.Collections.IEnumerator;
 
 public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandler>
 {
@@ -22,8 +23,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
     private bool started, isGameActive, isAuthenticated;
 
     private Transform joinCodeObj;
-
-    private TextMeshProUGUI title, pingText, loginStatusText;
+    private TextMeshProUGUI title, pingText, loginStatusText, joinCodeStatusText;
     TMP_InputField usernameInput, passwordInput;
 
     MainThreadDispatcher mainThreadDispatcher;
@@ -34,38 +34,8 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         {
             Destroy(gameObject);
         }
+
         DontDestroyOnLoad(gameObject);
-    }
-
-    string SaveGameState()
-    {
-        string gameState = GameManager.Instance.GetSerializedGame();
-        GameManager.Instance.EndGameForHostMigration();
-        
-        return gameState;
-    }
-
-    void MigrateHost(string gameState)
-    {
-        IsHostingGame(0);
-        
-        StartHostWithRelay().ContinueWith(task =>
-        {
-            if (task.IsFaulted)
-            {
-                Debug.LogError($"Failed to start host with relay: {task.Exception}");
-                return;
-            }
-
-            string joinCode = task.Result;
-
-            Debug.Log("Sending join code to main thread");
-
-            mainThreadDispatcher.Enqueue(() =>
-            {
-                OnJoinOrHost(joinCode, gameState);
-            });
-        });
     }
 
     void OnClientConnected(ulong clientId)
@@ -76,35 +46,35 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
             if (isGameActive)
             {
                 GameManager.Instance.ResumeGame();
+
                 GameManager.Instance.SendGameStateServerRpc(clientId);
                 
                 // Request the client to send their avatar
-                RequestClientAvatarClientRpc(new ClientRpcParams 
-                { 
-                    Send = new ClientRpcSendParams 
-                    { 
-                        TargetClientIds = new List<ulong> { clientId } 
-                    } 
+                RequestClientAvatarClientRpc(new ClientRpcParams
+                {
+                    Send = new ClientRpcSendParams
+                    {
+                        TargetClientIds = new List<ulong> { clientId }
+                    }
                 });
-                
                 return;
             }
 
             isGameActive = true;
-            GameManager.Instance.StartGameServerRpc(clientId, true);
+            GameManager.Instance.StartGameServerRpc(clientId);
         }
     }
-    
+
     [ClientRpc]
     void RequestClientAvatarClientRpc(ClientRpcParams clientRpcParams = default)
     {
         if (isHosting)
             return;
-        
+
         // Client sends their avatar to the host
         StartCoroutine(SendClientAvatar());
     }
-    
+
     IEnumerator SendClientAvatar()
     {
         if (FirebaseStorageHandler.Instance != null)
@@ -112,7 +82,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
             // Get the client's avatar texture
             Task<Texture2D> avatarTask = FirebaseStorageHandler.Instance.GetCurrentAvatarTexture();
             yield return new WaitUntil(() => avatarTask.IsCompleted);
-        
+
             if (avatarTask.Exception == null && GameManager.Instance != null)
             {
                 // Set the client's avatar locally and notify the host
@@ -130,18 +100,116 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
             return;
         }
 
-        // FIXME: This does not work as expected
-        // check if the client that disconnected was the host
-        if (!isHosting && clientId == NetworkManager.ServerClientId && NetworkManager.Singleton.IsConnectedClient)
+        // Client detects that the host disconnected - initiate host migration
+        if (!isHosting && NetworkManager.Singleton.IsClient && !NetworkManager.Singleton.IsServer)
         {
             Debug.Log("Host has disconnected. Initiating host migration...");
+
             // Save the game state
-            string gameState = SaveGameState();
-            // Stop the unity relay server/lobby, and then create a new one with the non-disconnected client as the host
+            string migratedGameState = SaveGameState();
+
+            started = false;
+            isGameActive = false;
+
+            // Shutdown the network connection
+            NetworkManager.Singleton.OnClientConnectedCallback -= OnClientConnected;
+            NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnect;
             NetworkManager.Singleton.Shutdown();
-            // AKA Host Migration
-            MigrateHost(gameState);
+
+            // Load the MigrateHost scene instead of the Lobby
+            SceneManager.LoadSceneAsync("Migrating").completed += operation =>
+            {
+                HandleMigrationComplete(migratedGameState);
+            };
         }
+    }
+
+    void HandleMigrationComplete(string migratedGameState)
+    {
+        NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
+        NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnect;
+
+        isHosting = true;
+        isGameActive = true;
+
+        StartGameAsMigratedHost(migratedGameState);
+    }
+
+    void StartGameAsMigratedHost(string migratedGameState)
+    {
+        if (started)
+            return;
+
+        Debug.Log("Starting game as migrated host (black player)");
+
+        StartHostWithRelay().ContinueWith(task =>
+        {
+            if (task.IsFaulted)
+            {
+                Debug.LogError($"Failed to start host with relay during migration: {task.Exception}");
+                return;
+            }
+
+            string joinCode = task.Result;
+            Debug.Log($"Migration host relay join code: {joinCode}");
+
+            mainThreadDispatcher.Enqueue(() =>
+            {
+                // Use specialized OnMigrationHost method
+                OnMigrationHost(joinCode, migratedGameState);
+            });
+        });
+    }
+
+    void OnMigrationHost(string joinCode, string gameState)
+    {
+        Debug.Log("Setting up migrated host");
+        started = true;
+
+        NetworkManager.Singleton.SceneManager.OnLoadComplete += (id, sceneName, mode) =>
+        {
+            if (sceneName == "UnityChessGame")
+            {
+                mainThreadDispatcher.Enqueue(() =>
+                {
+                    GameManager.Instance.SetGameCode(joinCode);
+
+                    // Configure GameManager for host migration (host plays black)
+                    if (GameManager.Instance != null)
+                    {
+                        IEnumerator WaitForStart()
+                        {
+                            // Wait for start functions for GameManager to be complete (~1 second scrappy fix)
+                            yield return new WaitForSeconds(1);
+                            GameManager.Instance.SetupAsMigratedHostServerRpc(gameState);
+                        }
+
+                        StartCoroutine(WaitForStart());
+                    }
+                });
+            }
+        };
+
+        NetworkManager.Singleton.SceneManager.LoadScene("UnityChessGame", LoadSceneMode.Single);
+    }
+
+    // Save the current game state before host migration
+    string SaveGameState()
+    {
+        if (GameManager.Instance == null)
+        {
+            Debug.LogError("Game Manager is null during host migration");
+            return "";
+        }
+
+        string gameState = GameManager.Instance.GetSerializedGame();
+        if (string.IsNullOrEmpty(gameState))
+        {
+            Debug.LogWarning("Game state is empty during host migration");
+        }
+
+        GameManager.Instance.EndGameForHostMigration();
+        return gameState;
     }
 
     public void QuitGame()
@@ -174,10 +242,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
 
                 Debug.Log("Sending join code to main thread");
 
-                mainThreadDispatcher.Enqueue(() =>
-                {
-                    OnJoinOrHost(joinCode);
-                });
+                mainThreadDispatcher.Enqueue(() => { OnJoinOrHost(joinCode); });
             });
             return;
         }
@@ -188,25 +253,34 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         startButton.GetComponent<Button>().onClick.AddListener(JoinGame);
         GameObject.FindWithTag("Dropdown").SetActive(false);
         joinCodeObj.gameObject.SetActive(true);
+        joinCodeStatusText = joinCodeObj.transform.Find("JoinStatus").GetComponent<TextMeshProUGUI>();
         title.text = "Enter Join Code";
     }
 
     void JoinGame()
     {
         string joinCode = joinCodeObj.GetComponent<TMP_InputField>().text;
+        if (string.IsNullOrEmpty(joinCode))
+        {
+            joinCodeStatusText.text = "Join code cannot be empty";
+            return;
+        }
+
         Debug.Log($"Joining game with code: {joinCode}");
+        joinCodeStatusText.text = "Joining game...";
         JoinWithRelay(joinCode).ContinueWith(task =>
         {
             if (task.IsFaulted)
             {
                 Debug.LogError($"Failed to join with relay: {task.Exception}");
+                mainThreadDispatcher.Enqueue(() =>
+                {
+                    joinCodeStatusText.text = $"Failed to join with relay: {task.Exception?.Message}";
+                });
                 return;
             }
-            
-            mainThreadDispatcher.Enqueue(() =>
-            {
-                OnJoinOrHost(joinCode);
-            });
+
+            mainThreadDispatcher.Enqueue(() => { OnJoinOrHost(joinCode); });
         });
     }
 
@@ -222,16 +296,15 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
                 mainThreadDispatcher.Enqueue(() =>
                 {
                     GameManager.Instance.SetGameCode(joinCode);
-                    if(gameState != null)
+                    if (gameState != null)
                         GameManager.Instance.LoadGame(gameState);
                 });
-                    
             }
         };
-        
+
         if (isHosting)
             NetworkManager.Singleton.SceneManager.LoadScene("UnityChessGame",
-                UnityEngine.SceneManagement.LoadSceneMode.Single);
+                LoadSceneMode.Single);
     }
 
     public void IsHostingGame(int choice)
@@ -247,10 +320,10 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
                 loginStatusText.text = "Username cannot be empty";
             return;
         }
-        
+
         if (loginStatusText != null)
             loginStatusText.text = "Signing in...";
-            
+
         try
         {
             // Sign in with username/password
@@ -258,7 +331,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
             {
                 // Use password-based authentication
                 await AuthenticationService.Instance.SignInWithUsernamePasswordAsync(
-                    usernameInput.text, 
+                    usernameInput.text,
                     passwordInput.text);
             }
             else
@@ -269,13 +342,13 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
                     CreateAccount = true
                 };
                 await AuthenticationService.Instance.SignInAnonymouslyAsync(loginOptions);
-                
+
                 // Set player name to match username input
-                AuthenticationService.Instance.UpdatePlayerNameAsync(usernameInput.text);
+                await AuthenticationService.Instance.UpdatePlayerNameAsync(usernameInput.text);
             }
-            
+
             Debug.Log($"Signed in to Unity services as: {AuthenticationService.Instance.PlayerId}");
-            
+
             FirebaseService.Instance.UserID = AuthenticationService.Instance.PlayerId;
             loginPanel.SetActive(false);
             menuPanel.SetActive(true);
@@ -287,29 +360,28 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
                 loginStatusText.text = "Login failed: " + e.Message;
         }
     }
-    
+
     async void Register()
     {
-        
         if (string.IsNullOrEmpty(usernameInput.text) || string.IsNullOrEmpty(passwordInput.text))
         {
             if (loginStatusText != null)
                 loginStatusText.text = "Username and password are required";
             return;
         }
-        
+
         if (loginStatusText != null)
             loginStatusText.text = "Creating account...";
-            
+
         try
         {
             // Sign up with username/password
             await AuthenticationService.Instance.SignUpWithUsernamePasswordAsync(
-                usernameInput.text, 
+                usernameInput.text,
                 passwordInput.text);
-                
+
             Debug.Log($"Account created and signed in as: {AuthenticationService.Instance.PlayerId}");
-            
+
             FirebaseService.Instance.UserID = AuthenticationService.Instance.PlayerId;
             loginPanel.SetActive(false);
             menuPanel.SetActive(true);
@@ -324,38 +396,40 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
 
     async void Start()
     {
+        mainThreadDispatcher = MainThreadDispatcher.Instance;
+        
         GameObject pingCanvas = GameObject.FindWithTag("PingUI");
         GameObject debugConsole = GameObject.FindWithTag("DebugConsole");
         loginPanel = GameObject.FindWithTag("LoginPanel");
-        
+
         DontDestroyOnLoad(debugConsole);
 
         pingText = pingCanvas.transform.GetChild(0).GetComponent<TextMeshProUGUI>();
-        
+
         await InitialiseUnityServices();
-        
+
         Button loginButton = loginPanel.transform.Find("Login").GetComponent<Button>();
         Button registerButton = loginPanel.transform.Find("Register").GetComponent<Button>();
-        
+
         loginButton.onClick.AddListener(Login);
         registerButton.onClick.AddListener(Register);
-        
+
         usernameInput = loginPanel.transform.Find("Username").GetComponent<TMP_InputField>();
         passwordInput = loginPanel.transform.Find("Password").GetComponent<TMP_InputField>();
         loginStatusText = loginPanel.transform.Find("LoginStatus").GetComponent<TextMeshProUGUI>();
         loginPanel.transform.Find("Exit").GetComponent<Button>().onClick.AddListener(QuitGame);
-
-        mainThreadDispatcher = MainThreadDispatcher.Instance;
 
         if (NetworkManager.Singleton != null)
         {
             NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
             NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnect;
         }
-        
+
         ResetState();
-        
+
         menuPanel.SetActive(false);
+
+        StartCoroutine(LogPingToConsole());
     }
 
     async Task InitialiseUnityServices()
@@ -369,7 +443,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
             //     await AuthenticationService.Instance.SignInAnonymouslyAsync();
             //     Debug.Log($"Signed in as: {AuthenticationService.Instance.PlayerId}");
             // }
-            
+
             UnityAnalyticsHandler.Instance.OnServicesInitialised();
         }
         catch (Exception e)
@@ -395,9 +469,8 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
                 allocation.AllocationIdBytes,
                 allocation.Key,
                 allocation.ConnectionData
-                // TODO: Set secure?  
             );
-            
+
             NetworkManager.Singleton.StartHost();
 
             return joinCode;
@@ -409,32 +482,22 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         }
     }
 
-    async Task<bool> JoinWithRelay(string joinCode)
+    async Task JoinWithRelay(string joinCode)
     {
-        try
-        {
-            JoinAllocation allocation = await RelayService.Instance.JoinAllocationAsync(joinCode);
+        JoinAllocation allocation = await RelayService.Instance.JoinAllocationAsync(joinCode);
 
-            UnityTransport transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+        UnityTransport transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
 
-            transport.SetRelayServerData(
-                allocation.RelayServer.IpV4,
-                (ushort)allocation.RelayServer.Port,
-                allocation.AllocationIdBytes,
-                allocation.Key,
-                allocation.ConnectionData,
-                allocation.HostConnectionData
-            );
+        transport.SetRelayServerData(
+            allocation.RelayServer.IpV4,
+            (ushort)allocation.RelayServer.Port,
+            allocation.AllocationIdBytes,
+            allocation.Key,
+            allocation.ConnectionData,
+            allocation.HostConnectionData
+        );
 
-            NetworkManager.Singleton.StartClient();
-
-            return true;
-        }
-        catch (Exception e)
-        {
-            Debug.LogError($"Failed to join with relay: {e.Message}");
-            return false;
-        }
+        NetworkManager.Singleton.StartClient();
     }
 
     private void FixedUpdate()
@@ -485,7 +548,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
     {
         isGameActive = false;
     }
-    
+
     public void RestartGame()
     {
         isGameActive = true;
@@ -493,9 +556,6 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
 
     public void SaveGame(string sessionCode, string serialisedGame)
     {
-        // if (!isHosting)
-        //     return;
-
         FirebaseService.Instance.SaveGame(sessionCode, serialisedGame);
     }
 
@@ -503,7 +563,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
     {
         if (!isHosting)
             return null;
-        
+
         return await FirebaseService.Instance.LoadGame(sessionCode);
     }
 
@@ -514,22 +574,31 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
             loginPanel = GameObject.FindWithTag("LoginPanel");
             loginPanel.SetActive(false);
         }
-        
+
         isHosting = true;
         started = false;
         isGameActive = false;
-        
+
         Button startButton = GameObject.FindWithTag("StartButton").GetComponent<Button>();
         Button quitButton = GameObject.FindWithTag("QuitButton").GetComponent<Button>();
         TMP_Dropdown dropDown = GameObject.FindWithTag("Dropdown").GetComponent<TMP_Dropdown>();
         joinCodeObj = dropDown.transform.parent.Find("JoinCode");
         title = dropDown.transform.parent.Find("Title").GetComponent<TextMeshProUGUI>();
-        
+
         menuPanel = startButton.transform.parent.gameObject;
 
-        startButton.onClick.AddListener(StartGame);
+        startButton.onClick.AddListener(() => { StartGame(); });
         quitButton.onClick.AddListener(QuitGame);
         dropDown.onValueChanged.AddListener(IsHostingGame);
         joinCodeObj.gameObject.SetActive(false);
+    }
+
+    IEnumerator LogPingToConsole()
+    {
+        while (true)
+        {
+            yield return new WaitForSeconds(5);
+            Debug.Log($"Ping: {pingText.text}");
+        }
     }
 }
