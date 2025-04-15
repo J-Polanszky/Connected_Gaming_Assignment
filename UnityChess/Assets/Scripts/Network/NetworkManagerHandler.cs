@@ -170,7 +170,7 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
         Debug.Log("Setting up migrated host");
         started = true;
 
-        NetworkManager.Singleton.SceneManager.OnLoadComplete += (id, sceneName, mode) =>
+        void OnLoadingComplete(ulong id, string sceneName, LoadSceneMode mode)
         {
             if (sceneName == "UnityChessGame")
             {
@@ -192,7 +192,11 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
                     }
                 });
             }
-        };
+            
+            NetworkManager.Singleton.SceneManager.OnLoadComplete -= OnLoadingComplete;
+        }
+
+        NetworkManager.Singleton.SceneManager.OnLoadComplete += OnLoadingComplete;
 
         NetworkManager.Singleton.SceneManager.LoadScene("UnityChessGame", LoadSceneMode.Single);
     }
@@ -292,8 +296,8 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
     {
         Debug.Log("Executing on main thread");
         started = true;
-
-        NetworkManager.Singleton.SceneManager.OnLoadComplete += (id, sceneName, mode) =>
+        
+        void OnLoadingComplete(ulong id, string sceneName, LoadSceneMode mode)
         {
             if (sceneName == "UnityChessGame")
             {
@@ -304,12 +308,17 @@ public class NetworkManagerHandler : MonoBehaviourSingleton<NetworkManagerHandle
                         GameManager.Instance.LoadGame(gameState);
                 });
             }
-        };
+            NetworkManager.Singleton.SceneManager.OnLoadComplete -= OnLoadingComplete;
+        }
+
+        NetworkManager.Singleton.SceneManager.OnLoadComplete += OnLoadingComplete;
 
         if (isHosting)
             NetworkManager.Singleton.SceneManager.LoadScene("UnityChessGame",
                 LoadSceneMode.Single);
     }
+
+    
 
     public void IsHostingGame(int choice)
     {

@@ -416,6 +416,17 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
         if (!IsAvatarOwned(avatarId))
         {
             Debug.LogWarning($"Avatar {avatarId} is not owned");
+            // Load From Firebase
+            AvatarData avatarData = _avatarDictionary[avatarId];
+            string avatarPath = $"Avatars/{avatarData.path}{avatarData.fileType}";
+
+            // Download and save to disk since it's owned
+            byte[] avatarByteData = await DownloadFileBytes(avatarPath, 100 * 1024); // 100KB limit
+            Texture2D texture = new Texture2D(1, 1);
+            texture.LoadImage(avatarByteData);
+            // Cache the loaded texture
+            _avatarTextureCache[avatarId] = texture;
+            return texture;
         }
 
         string localFilePath = GetLocalAvatarPath(avatarId);
@@ -427,6 +438,7 @@ public class FirebaseStorageHandler : MonoBehaviourSingleton<FirebaseStorageHand
             if (!downloaded)
             {
                 Debug.LogError($"Failed to download avatar {avatarId}, cannot load texture");
+                return null;
             }
         }
 

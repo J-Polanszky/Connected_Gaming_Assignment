@@ -23,11 +23,11 @@ public class GameManager : NetworkBehaviour
 
     private NetworkVariable<bool> isGameActive = new();
     private NetworkVariable<int> currentPlayerTurn = new(); // 0 = White, 1 = Black
-    private NetworkVariable<ulong> whitePlayerId = new(ulong.MaxValue); // ID of the client playing white
-    private NetworkVariable<ulong> blackPlayerId = new(ulong.MaxValue); // ID of the client playing black
+    private NetworkVariable<ulong> whitePlayerId = new(); // ID of the client playing white
+    private NetworkVariable<ulong> blackPlayerId = new(); // ID of the client playing black
     private NetworkVariable<FixedString128Bytes> whiteAvatar = new();
     private NetworkVariable<FixedString128Bytes> blackAvatar = new();
-
+    
     private Transform gameInfo;
     private string gameCodeStr, serialisedGame;
     private TextMeshProUGUI gameCode;
@@ -162,6 +162,17 @@ public class GameManager : NetworkBehaviour
     // Currently selected serialization type (default is FEN).
     private GameSerializationType selectedSerializationType = GameSerializationType.FEN;
 
+    [ServerRpc(RequireOwnership = true)]
+    void SetDefaultClientIDsServerRpc()
+    {
+        // Only the host should execute this
+        if (!IsHost)
+            return;
+
+        whitePlayerId.Value = ulong.MaxValue;
+        blackPlayerId.Value = ulong.MaxValue;
+    }
+    
     /// <summary>
     /// Unity's Start method initialises the game and sets up event handlers.
     /// </summary>
@@ -201,11 +212,13 @@ public class GameManager : NetworkBehaviour
             [GameSerializationType.FEN] = new FENSerializer(),
             [GameSerializationType.PGN] = new PGNSerializer()
         };
-
+        
         SetClientIDServerRpc(NetworkManager.Singleton.LocalClientId);
 
         if (IsHost)
         {
+            SetDefaultClientIDsServerRpc();
+            
             SetupInitialGameState();
 
             IEnumerator DelayedStart()
@@ -243,11 +256,28 @@ public class GameManager : NetworkBehaviour
                 rightButtonText.text = "Save Game";
                 rightButton.onClick.RemoveAllListeners();
                 rightButton.onClick.AddListener(SaveGame);
+
+                LoadAvatarsIfAvailable();
             }
 
             StartCoroutine(DelayedStart());
         }
 
+        void LoadAvatarsIfAvailable()
+        {
+            string whiteAvatarId = whiteAvatar.Value.ToString();
+            string blackAvatarId = blackAvatar.Value.ToString();
+
+            if (!String.IsNullOrEmpty(whiteAvatarId))
+            {
+                Task whiteload = LoadRemoteAvatar(whiteAvatarId, true);
+            }
+            
+            if (!String.IsNullOrEmpty(blackAvatarId))
+            {
+                Task blackload = LoadRemoteAvatar(blackAvatarId, false);
+            }
+        }
 
 #if DEBUG_VIEW
         // Enable debug view if compiled with DEBUG_VIEW flag.
@@ -500,10 +530,20 @@ public class GameManager : NetworkBehaviour
     void SetClientIDServerRpc(ulong clientId)
     {
         // Prevent a migrated host (playing as black) from overwriting the white player ID
-        if (IsHost && IsPlayingBlack && whitePlayerId.Value != ulong.MaxValue)
+        if (IsHost)
         {
-            Debug.Log($"Migrated host preventing white player ID overwrite. Keeping ID: {whitePlayerId.Value}");
-            return; // Migrated host shouldn't change white player ID if it's already set
+            if (IsPlayingBlack)
+            {
+                if (whitePlayerId.Value != ulong.MaxValue)
+                {
+                    Debug.Log($"Migrated host preventing white player ID overwrite. Keeping ID: {whitePlayerId.Value}");
+                    return;
+                }
+            }
+            else
+            {
+                Debug.Log($"Host is not playing black. Current whitePlayerId: {whitePlayerId.Value}");
+            }
         }
 
         if (whitePlayerId.Value == ulong.MaxValue)
@@ -523,11 +563,11 @@ public class GameManager : NetworkBehaviour
         // FIXME: Dirty fix due to unity netcode's handling of defaults, and not having enough time to set up a proper fix
         if (newValue == ulong.MaxValue)
         {
-            if (!IsHost)
+            if (isGameActive.Value)
             {
                 SetClientIDServerRpc(NetworkManager.Singleton.LocalClientId);
             }
-
+        
             return;
         }
 
@@ -1052,12 +1092,18 @@ public class GameManager : NetworkBehaviour
             return;
 
         isGameActive.Value = true;
+        
+        ResumeGameClientRpc();
+    }
 
+    [ClientRpc]
+    void ResumeGameClientRpc()
+    {
         leftButtonText.text = "Resign";
         leftButton.onClick.RemoveAllListeners();
         leftButton.onClick.AddListener(Resign);
     }
-
+    
     [ServerRpc(RequireOwnership = true)]
     public void SendGameStateServerRpc(ulong clientId)
     {
@@ -1080,6 +1126,9 @@ public class GameManager : NetworkBehaviour
 
     IEnumerator InitialiseAvatar()
     {
+        // Might need to delay and wait to make sure idplaying white is set correct.
+        yield return new WaitForSeconds(1f);
+        
         if (FirebaseStorageHandler.Instance == null)
             throw new Exception("FirebaseStorageHandler is null");
 
@@ -1098,6 +1147,9 @@ public class GameManager : NetworkBehaviour
         if (FirebaseStorageHandler.Instance == null)
             return;
 
+        if (string.IsNullOrEmpty(avatarId))
+            return;
+        
         try
         {
             Texture2D avatarTexture = await FirebaseStorageHandler.Instance.GetAvatarTexture(avatarId);
