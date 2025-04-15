@@ -32,6 +32,17 @@ public class UnityAnalyticsHandler : MonoBehaviourSingleton<UnityAnalyticsHandle
         AnalyticsService.Instance.StartDataCollection();
     }
 
+    public void NewGameEvent(string serialisedGame, string gameCode)
+    {
+        GameStartedEvent newGameEvent = new GameStartedEvent
+        {
+            GameCode = gameCode,
+            SerialisedGame = serialisedGame
+        };
+        
+        AnalyticsService.Instance.RecordEvent(newGameEvent);
+    }
+    
     public void RecordPieceCaptured(Piece piece, Movement move, string gameCode)
     {
         PieceCapturedEvent pieceCapturedEvent = new PieceCapturedEvent

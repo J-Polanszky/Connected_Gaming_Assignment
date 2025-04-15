@@ -616,6 +616,9 @@ public class GameManager : NetworkBehaviour
 
         string serialisedGameState = SerializeGame();
         serialisedGame = serialisedGameState;
+        
+        // Send Game start event.
+        UnityAnalyticsHandler.Instance.NewGameEvent(serialisedGameState, gameCodeStr);
 
         StartGameClientRpc(serialisedGameState,
             new ClientRpcParams
