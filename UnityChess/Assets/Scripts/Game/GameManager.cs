@@ -467,6 +467,17 @@ public class GameManager : NetworkBehaviour
 
     private void OnPlayerTurnChanged(int oldValue, int newValue)
     {
+        // Show White/Black's turn if its not the client's turn, else say your turn
+        if (NetworkManager.Singleton.LocalClientId != (newValue == 0 ? whitePlayerId.Value : blackPlayerId.Value))
+        {
+            string playerName = newValue == 0 ? "White" : "Black";
+            UIManager.Instance.ShowMessage($"{playerName}'s turn!");
+        }
+        else
+        {
+            UIManager.Instance.ShowMessage("Your turn!");
+        }
+
         EnableCorrectPieces();
         GameResetToHalfMoveEvent?.Invoke();
     }
@@ -475,7 +486,8 @@ public class GameManager : NetworkBehaviour
     {
         Side currentSide = currentPlayerTurn.Value == 0 ? Side.White : Side.Black;
         ulong currentPlayerClientId = currentPlayerTurn.Value == 0 ? whitePlayerId.Value : blackPlayerId.Value;
-        Debug.Log($"White Player ID: {whitePlayerId.Value}, Black Player ID: {blackPlayerId.Value}, Current Player Client ID: {currentPlayerClientId}");
+        Debug.Log(
+            $"White Player ID: {whitePlayerId.Value}, Black Player ID: {blackPlayerId.Value}, Current Player Client ID: {currentPlayerClientId}");
 
         if (NetworkManager.Singleton.LocalClientId == currentPlayerClientId)
             BoardManager.Instance.EnsureOnlyPiecesOfSideAreEnabled(currentSide);
@@ -493,7 +505,7 @@ public class GameManager : NetworkBehaviour
             Debug.Log($"Migrated host preventing white player ID overwrite. Keeping ID: {whitePlayerId.Value}");
             return; // Migrated host shouldn't change white player ID if it's already set
         }
-        
+
         if (whitePlayerId.Value == ulong.MaxValue)
         {
             whitePlayerId.Value = clientId;
@@ -515,6 +527,7 @@ public class GameManager : NetworkBehaviour
             {
                 SetClientIDServerRpc(NetworkManager.Singleton.LocalClientId);
             }
+
             return;
         }
 
@@ -533,6 +546,7 @@ public class GameManager : NetworkBehaviour
         game = new Game();
     }
 
+    //FIXME: Sometimes the migration doesnt work, either avatar fails, but most commonly it happens if the host migration happens when its blacks turn.
     [ServerRpc(RequireOwnership = true)]
     public void SetupAsMigratedHostServerRpc(string gameState, bool isBlackPlayer)
     {
@@ -630,6 +644,18 @@ public class GameManager : NetworkBehaviour
         rightButtonText.text = "Save Game";
         rightButton.onClick.RemoveAllListeners();
         rightButton.onClick.AddListener(SaveGame);
+
+        // Show White/Black's turn if its not the client's turn, else say your turn
+        if (NetworkManager.Singleton.LocalClientId !=
+            (currentPlayerTurn.Value == 0 ? whitePlayerId.Value : blackPlayerId.Value))
+        {
+            string playerName = currentPlayerTurn.Value == 0 ? "White" : "Black";
+            UIManager.Instance.ShowMessage($"{playerName}'s turn!");
+        }
+        else
+        {
+            UIManager.Instance.ShowMessage("Your turn!");
+        }
 
         EnableCorrectPieces();
     }
@@ -834,16 +860,18 @@ public class GameManager : NetworkBehaviour
             UnityAnalyticsHandler.Instance.RecordPieceCaptured(capturedPiece, move,
                 GetGameCode());
 
+        SerialisedMove serialisedMove = new SerialisedMove
+        {
+            StartSquare = startSquare,
+            EndSquare = endSquare,
+            SpecialSquare = specialSquare,
+            IsSpecialMove = isSpecialMove,
+            SpecialMoveType = specialMoveType,
+            PromotionPieceType = promotionPieceType
+        };
+
         ExecuteMoveClientRpc(
-            new SerialisedMove
-            {
-                StartSquare = startSquare,
-                EndSquare = endSquare,
-                SpecialSquare = specialSquare,
-                IsSpecialMove = isSpecialMove,
-                SpecialMoveType = specialMoveType,
-                PromotionPieceType = promotionPieceType
-            }
+            serialisedMove
         );
 
         game.HalfMoveTimeline.TryGetCurrent(out HalfMove latestHalfMove);
@@ -851,12 +879,14 @@ public class GameManager : NetworkBehaviour
 
         if (gameEnded)
         {
-            GameEndClientRpc(latestHalfMove.CausedCheckmate);
+            GameEndClientRpc(latestHalfMove.CausedCheckmate, false, currentPlayerTurn.Value == 0);
             UnityAnalyticsHandler.Instance.RecordVictory(currentPlayerTurn.Value == 0,
                 latestHalfMove.CausedCheckmate ? VictoryType.Checkmate : VictoryType.Stalemate, gameCodeStr);
         }
         else
+        {
             currentPlayerTurn.Value = currentPlayerTurn.Value == 0 ? 1 : 0;
+        }
 
         MoveExecutedEvent?.Invoke();
 
@@ -887,9 +917,6 @@ public class GameManager : NetworkBehaviour
 
         if (pieceGo == null)
             return;
-
-        Transform pieceTransform = pieceGo.transform;
-        Transform destTransform = BoardManager.Instance.GetSquareGOByPosition(endSquare).transform;
 
         Movement movement = null;
 
@@ -940,6 +967,12 @@ public class GameManager : NetworkBehaviour
     [ClientRpc]
     void GameEndClientRpc(bool isCheckMate = false, bool isResignation = false, bool didWhiteWin = false)
     {
+        // TODO: THIS IS A TEMPFIX AS SOMEHOW EVEN WITH THE SAME CODE, THE OLD SOLUTION DOESNT WORK
+        // Reload the latest half move when the game ends
+        int latestHalfMoveIndex = game.HalfMoveTimeline.HeadIndex;
+        game.ResetGameToHalfMoveIndex(latestHalfMoveIndex);
+        GameResetToHalfMoveEvent?.Invoke();
+        
         BoardManager.Instance.SetActiveAllPieces(false);
 
         if (isResignation)
